@@ -5819,3 +5819,33 @@ Verification:
 - `uv run --extra dev pytest`: 158 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.92: MMA incomplete-removal guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the stale tiled rescale guard.
+- Record the next generated MMA head_dim32 patch failure.
+- Reject patches whose own risk text identifies incomplete removal of old code.
+
+Loop result:
+
+- The agent proposed another compile-first MMA head_dim32 two-chunk patch.
+- The patch kept score WMMA K at 16 and used explicit `__nv_bfloat16`, but still left old
+  single-chunk PV lines after the new two-chunk PV loop.
+- `git apply --check` rejected the patch as corrupt before compile.
+- The lineage did not change.
+
+Decision:
+
+- The patch was self-invalid: its risk text said incomplete removal of old single-chunk lines was
+  the main risk and those old lines should be completely removed.
+- Planner validation now rejects non-empty patches with that incomplete-removal warning, forcing a
+  corrected diff before `git apply`.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 70 passed.
+- `uv run --extra dev pytest`: 159 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
