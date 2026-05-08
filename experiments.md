@@ -1141,3 +1141,84 @@ Tradeoffs and decision:
 - I did not keep the code because it worsened the development smoke and increased complexity.
   A future cp.async attempt should use double-buffering or a pipeline that overlaps K/V tile
   movement with score/PV work, and should include profiler evidence rather than only timing.
+
+## 2026-05-08 - Checkpoint 2.7: replicate timing statistics for score records
+
+Success criteria for this checkpoint:
+
+- Improve the measurement substrate without changing any CUDA kernel behavior.
+- Add a bounded way to collect repeated CUDA-event timings per case.
+- Keep the existing one-trial score behavior compatible.
+- Make timing noise visible in score JSON so the lineage gate is not relying on an opaque single
+  average.
+- Verify the change with unit tests and a tiny A6000 candidate smoke.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/benchmark.py`.
+- Added optional `trials` plumbing to `score_backend`.
+- Added `timing_summary(samples_ms)` with:
+  - raw `samples_ms`;
+  - `trials`;
+  - `min_ms`;
+  - `median_ms`;
+  - `mean_ms`;
+  - coefficient of variation `cv`.
+- Changed per-case `milliseconds` to use the median timing sample when multiple trials are
+  requested. `tflops` is still computed from `milliseconds`, so the lineage-facing
+  `geomean_tflops` now uses median timing in multi-trial runs.
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py` so `score`, `worker-score`, and `seed-baseline`
+  accept and forward `--trials`.
+- Updated `/home/ubuntu/avo-ampere/tests/test_benchmark_math.py` and
+  `/home/ubuntu/avo-ampere/tests/test_cli.py`.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md`.
+
+Online research notes:
+
+- Exa search surfaced the PyTorch benchmark guidance that warmups, replicate measurements, and
+  median statistics are important for noisy CUDA/kernel measurements. This directly motivated
+  median-based score timing rather than adding another single average.
+  Source: https://docs.pytorch.org/docs/stable/benchmark_utils.html
+- Exa search also surfaced Lawrence Atkins' CUDA timing writeup, reinforcing the existing use of
+  CUDA events and warmups for GPU timing.
+  Source: https://lawrencium77.github.io/pytorch/cuda/gpu/2023/03/28/timings.html
+- Exa search found Ampere FlashAttention examples and from-scratch worklogs that use profiling
+  and repeated measurements as part of kernel optimization. This checkpoint keeps the scope to
+  score JSON instrumentation rather than adding Nsight Compute integration yet.
+  Sources:
+  - https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+  - https://github.com/rishisankar/flashattention2
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/benchmark.py avo/cli.py tests/test_benchmark_math.py tests/test_cli.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_benchmark_math.py tests/test_cli.py tests/test_candidate_backend.py`
+  passed, 11 tests.
+- Full unit suite:
+  `uv run --extra dev pytest`
+  passed, 55 tests.
+- Tiny CUDA candidate smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`
+  passed with `all_correct=true`.
+  - Non-causal BF16 max abs error: `0.00390625`.
+  - Non-causal samples: `[3.2025599479675293, 0.8102080225944519, 0.7377600073814392]` ms.
+  - Non-causal median: `0.8102080225944519` ms.
+  - Non-causal CV: `0.7232187690607705`.
+  - Causal BF16 max abs error: `0.015625`.
+  - Causal samples: `[0.7121279835700989, 0.7498559951782227, 0.8896639943122864]` ms.
+  - Causal median: `0.7498559951782227` ms.
+  - Causal CV: `0.09742281126662047`.
+  - Geomean: `1.4863385361021696e-05` TFLOPS.
+
+Tradeoffs and decision:
+
+- This does not make the benchmark statistically complete. It gives the agent and lineage gate
+  enough evidence to see when a run is noisy and to use a median sample instead of a single opaque
+  timing value.
+- The high non-causal CV in the smoke confirms why this is useful. Future larger comparisons
+  should use more warmup and more trials, and eventually profiler counters, before accepting small
+  performance deltas as real.
