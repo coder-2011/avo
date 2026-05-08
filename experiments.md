@@ -195,3 +195,36 @@ Tradeoffs and uncertainty:
 - The next missing piece is candidate-kernel support: a concrete seed/candidate CUDA
   extension path that can be compiled, imported in an isolated scorer, compared to PyTorch
   SDPA, and then committed only via `commit_score`.
+
+## 2026-05-08 - Checkpoint 1.4: real A6000 runtime smoke verification
+
+Success criteria for this checkpoint:
+
+- Verify the local runtime still sees the intended A6000/sm_86 target.
+- Verify the compile gate invokes NVCC with `compute_86,sm_86`.
+- Verify the isolated scorer can run a real CUDA Torch SDPA benchmark and return structured
+  JSON without crashing the orchestrator.
+
+Commands and results:
+
+- `uv run --extra cuda python -m avo env` in `/home/ubuntu/avo-ampere`: passed.
+  - GPU: NVIDIA RTX A6000.
+  - Compute capability: 8.6.
+  - Target gencode: `-gencode=arch=compute_86,code=sm_86`.
+  - PyTorch: `2.11.0+cu130`, CUDA available.
+- `uv run python -m avo compile --source kernels/smoke.cu --out-dir /tmp/avo-build-smoke`:
+  passed. The command used `/usr/local/cuda-12.9/bin/nvcc` and the explicit
+  `-gencode=arch=compute_86,code=sm_86` flag.
+- `uv run --extra cuda python -m avo score --backend torch-sdpa --seq-lens 4096 --causal both --repeats 1 --warmup 1 --timeout-s 180`:
+  passed through the child-process scorer.
+  - `all_correct`: true.
+  - Non-causal 4096: 9.991 ms, 110.047 TFLOPS.
+  - Causal 4096: 5.943 ms, 92.500 TFLOPS.
+  - Geomean: 100.893 TFLOPS.
+
+Tradeoffs and uncertainty:
+
+- This is a smoke run, not a stable benchmark. `repeats=1` is only enough to verify the
+  orchestration, correctness gate, TFLOPS calculation path, and child-process JSON result.
+- Full benchmark runs should use the complete sequence-length suite and more repeats once
+  FA2 installation/build time is handled.
