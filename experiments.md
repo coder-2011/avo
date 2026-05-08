@@ -7303,3 +7303,54 @@ Verification:
 - `uv run --extra dev pytest`: passed, 187 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.24: Self-invalid PV preload retry guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after unpatched MMA score retry feedback.
+- If a patch applies but its own risk text predicts a compile failure, move the fix to decision
+  validation so the patch is not applied in future loops.
+- Keep the current candidate source and lineage unchanged unless a patch clears validation and
+  scoring.
+
+Source refresh:
+
+- Exa refreshed Ampere/SM80 attention references before this run. The useful reinforcement was that
+  real Ampere FlashAttention-style kernels combine `cp.async`, tensor-core MMA, online softmax, and
+  register/shared-memory pipelines. The search did not justify repeating self-invalid preload
+  patches or extra shared-memory round trips without materially different dataflow.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_unpatched_score_feedback.json`.
+- The planner proposed a PV `v_frag_next` preload patch and used
+  `--out-dir build/mma_pv_preload`.
+- The patch applied, then compile failed.
+- Cleanup reverse-applied the patch successfully.
+- No score payload was produced and the lineage did not change.
+
+Compile result:
+
+- NVCC rejected the patch with two scope errors:
+  `identifier "chunk_offset" is undefined` at the `pv_tile` store, and
+  `identifier "chunk" is undefined` in a preload guard after the loop.
+- The decision risk text explicitly warned that the patch referenced `chunk` outside the loop, would
+  fail compilation, and should not be scored as-is.
+
+Decision:
+
+- Added `will fail compile`, `will fail compilation`, and `do not score this patch` to the
+  self-rejecting phrase list.
+- Runtime validation now rejects patches whose own decision text says they will fail compilation or
+  should not be scored.
+- Runtime knowledge records the PV-preload scope failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 99 tests.
+- `uv run --extra dev pytest`: passed, 188 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
