@@ -2744,3 +2744,83 @@ Tradeoffs and decision:
 - The current lineage best now represents the warp-row seed at `seq_len=64`, `head_dim=32`. Future
   accepted steps must match or improve `0.0005428703821737525` geomean TFLOPS while preserving
   correctness.
+
+## 2026-05-08 - Checkpoint 3.20: Warp-row shared-staging scale-up and agent field guard
+
+Success criteria for this checkpoint:
+
+- Add one fresh Ampere-specific research note to the runtime knowledge base before the next loop.
+- Continue the bounded loop against the current warp-row lineage best.
+- Capture and fix any new agent structured-output reliability issue.
+
+Online research:
+
+- Exa found NVIDIA CUTLASS's CuTeDSL Ampere FlashAttention v2 example. The example targets Ampere
+  FlashAttention-style forward attention and combines 128-bit `cp.async` Q/K/V global-to-shared
+  copies, Ampere BF16/FP16 tensor-core MMA via `MmaF16BF16Op(..., (16, 8, 16))`, register
+  pipelining for shared-to-register copies, online softmax with output rescaling, and head-dim
+  padding to multiples of 32. It uses default 128x128 m/n tiles with 128 threads, but the local
+  candidate search should still stay on small smoke shapes until correctness is stable.
+  Source: https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+- Runtime commit `610c72a docs: add cutlass ampere fa2 note` added this concise direction note to
+  `knowledge/ampere.md`.
+
+Accepted command:
+
+`uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge
+knowledge/ampere.md --attempts-dir benchmarks/attempts --loop-json benchmarks/latest-loop.json
+--max-steps 1 --timeout-s 300 --env-file ../avo/.env.local`
+
+The agent selected:
+
+`avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens
+128 --total-tokens 128 --num-heads 1 --head-dim 64 --dtype bf16 --causal both --repeats 1
+--warmup 1 --trials 1`
+
+Result:
+
+- Gate decision: accepted.
+- Acceptance reason: candidate passed correctness and throughput gate.
+- Previous best geomean: `0.0005428703821737525` TFLOPS.
+- Candidate geomean: `0.003413329681044312` TFLOPS.
+- Noncausal case: seq_len 128, BF16, head_dim 64, max_abs_error `0.001953125`,
+  `0.8708800077438354` ms, `0.00481616751183216` TFLOPS.
+- Causal case: seq_len 128, BF16, head_dim 64, max_abs_error `0.0078125`,
+  `0.8669120073318481` ms, `0.0024191059556950213` TFLOPS.
+- Benchmark environment: Torch `2.11.0+cu130`, CUDA `13.0`, Python `3.12.13`,
+  NVIDIA RTX A6000, `sm_86`.
+
+Lineage artifacts:
+
+- Nested lineage commit: `f360509 evolve: accept candidate`.
+- Only `scores/latest.json` changed because the accepted source snapshot was already the warp-row
+  seed from the previous accepted step.
+
+Agent reliability discovery and fix:
+
+- The accepted decision had a malformed-looking `expected_effect` value containing
+  `<parameter name="risk">...`, while the actual `risk` field was also present and correct.
+- This did not affect command execution or scoring, but it is a structured-output contamination
+  pattern that should be retried instead of recorded.
+- Runtime commit `6eb3dca fix: reject contaminated agent fields` now rejects ordinary string fields
+  containing tool parameter markup. `candidate_patch` remains governed by the raw-diff validator.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py` passed, 34 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 115 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+
+Tradeoffs and decision:
+
+- This is still a no-patch scale-up of the existing warp-row seed, not an optimization. It gives the
+  loop a stronger correctness/performance checkpoint before asking for code edits.
+- The current lineage best is now `0.003413329681044312` geomean TFLOPS on `seq_len=128`,
+  `head_dim=64`, which future accepted candidates must match or improve.
