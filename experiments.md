@@ -9054,3 +9054,40 @@ Verification:
 - `uv run --extra dev pytest`: passed, 258 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.60: Prevent uncontrolled FA2 optional-extra builds
+
+Success criteria for this checkpoint:
+
+- Keep the FA2 baseline installation path pinned to the Ampere build environment.
+- Prevent `uv run --extra baseline ...` from building `flash-attn` before AVO can set
+  `FLASH_ATTN_CUDA_ARCHS=80`, `MAX_JOBS=1`, and `NVCC_THREADS=1`.
+- Document the baseline dependency boundary and add a regression test.
+
+Observation:
+
+- Running `uv run --extra cuda --extra baseline python -m avo env --env-file ../avo/.env.local`
+  attempted to build `flash-attn==2.8.3` during dependency resolution, before AVO code ran. The
+  build used the upstream broad default arch list (`sm_80`, `sm_90`, `sm_100`, `sm_120`) instead of
+  the controlled A6000/Ampere build settings. The process was interrupted and left no installed
+  `flash_attn` module.
+
+Decision:
+
+- Removed `flash-attn` from the `baseline` optional dependency group. FA2 must be installed
+  explicitly with:
+  `FLASH_ATTN_CUDA_ARCHS=80 MAX_JOBS=1 NVCC_THREADS=1 uv pip install flash-attn --no-build-isolation`.
+- Updated the README baseline command to run `seed-baseline` from the existing `cuda` environment
+  after the explicit install, rather than using `--extra baseline`.
+- Added a test that parses `pyproject.toml` and asserts the `baseline` extra does not auto-install
+  `flash-attn`.
+- Updated the Ampere knowledge base with the dependency-resolution caveat.
+
+Verification:
+
+- `uv run --extra baseline python - <<'PY' ... importlib.util.find_spec('flash_attn') ... PY`:
+  returned `None` without starting a FlashAttention build.
+- `uv run --extra dev pytest tests/test_cli.py::test_baseline_extra_does_not_auto_install_flash_attn tests/test_cli.py::test_baseline_build_env_targets_flash_attn_ampere tests/test_cli.py::test_seed_baseline_rejects_missing_flash_attn_when_cuda_build_blocked -q`: passed, 3 tests.
+- `uv run --extra dev pytest`: passed, 259 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
