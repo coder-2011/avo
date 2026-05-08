@@ -1361,3 +1361,51 @@ Tradeoffs and decision:
   bounded to existing `avo` commands.
 - The attempt summaries are intentionally lossy. Exact logs remain in JSON files, while prompt
   context gets only the signal needed to avoid repeated dead ends.
+
+## 2026-05-08 - Checkpoint 3.0: Anthropic readiness in env status
+
+Success criteria for this checkpoint:
+
+- Make the Anthropic live-planner prerequisite visible before running `agent-plan` or
+  `evolve-once`.
+- Keep the check in the existing CLI surface instead of adding a new subsystem.
+- Do not print or persist the Anthropic API key value.
+- Allow the status check to load a local env file because the current shell does not have
+  `ANTHROPIC_API_KEY` set.
+- Verify with unit tests, CLI smoke checks, and lint.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py`.
+- `avo env` now accepts `--env-file PATH`.
+- The existing environment JSON now includes an `agent` block with:
+  - whether the Anthropic Python SDK can be imported;
+  - the Anthropic SDK version when available;
+  - whether `ANTHROPIC_API_KEY` is present;
+  - whether the requested env file existed and was loaded.
+- Updated `/home/ubuntu/avo-ampere/tests/test_cli.py` so the agent status reports key presence
+  without including the secret value.
+- Updated `/home/ubuntu/avo-ampere/README.md` with the readiness command.
+
+Online research notes:
+
+- Exa search found Anthropic's official Python SDK docs showing `Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))`
+  and dotenv-style local key loading as the documented path. The runtime already used this shape;
+  this checkpoint exposes it in `avo env` so a missing key is visible before a live planner call.
+  Source: https://console.anthropic.com/docs/en/api/sdks/python
+- Exa search found Anthropic key-handling guidance recommending environment variables and keeping
+  local dotenv files out of source control. The readiness JSON reports only booleans and metadata,
+  not the key value.
+  Source: https://support.anthropic.com/en/articles/9767949-api-key-best-practices-keeping-your-keys-safe-and-secure
+
+Local finding:
+
+- The current shell still reports `ANTHROPIC_API_KEY` as missing.
+- `/home/ubuntu/avo/.env.local` exists, while `/home/ubuntu/avo-ampere` has no local env file.
+- `uv run --extra agent ... import anthropic` reported version `0.100.0` before this checkpoint.
+
+Tradeoffs and decision:
+
+- This is a readiness checkpoint, not a live Anthropic planner run. It removes ambiguity about why
+  a planner smoke can fail, but the actual `agent-plan` call still requires a valid key in the
+  process environment or a supplied env file.
