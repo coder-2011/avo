@@ -8387,3 +8387,64 @@ Verification:
 - `uv run --extra dev pytest`: passed, 224 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.48: Structural transform preflight and promotion
+
+Success criteria for this checkpoint:
+
+- Run a live loop after closing the raw CUDA patch channel.
+- If planning fails because the planner describes a CUDA edit but provides neither transform nor
+  patch, make the validation feedback point at the structured transform channel instead of the old
+  patch-only wording.
+- Replace remaining reactive CUDA phrase guards with named structural preflight tracks.
+- Persist recurring failure-class promotions instead of only telling the planner to promote them.
+- Recenter guidance on realistic long-sequence target workloads, with small candidate shapes treated
+  as smoke-only fences.
+- Verify with focused tests and full checks.
+
+Live loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_raw_cuda_patch_closure.json`.
+- Planning failed after three retries before any candidate command executed.
+- The final invalid decision described adding a `probability_frag_next` WMMA preload skeleton but
+  supplied no `candidate_transform` and no raw patch.
+- No score payload was produced and lineage stayed unchanged.
+- A follow-up live loop after structural preflight/promotion changes still failed planning after
+  three retries. The planner described a `candidate_transform set_constexpr_int` change to
+  `kMaxSeqLen` but omitted the transform object.
+- A later live loop after explicit transform-shorthand recovery still failed planning after three
+  retries with a recorded no-patch compile diagnostic. The failure is now classified as a planning
+  validation class instead of `unknown`.
+
+Decision:
+
+- The validation error for code-change descriptions without an edit payload now says
+  `candidate_transform or candidate_patch must be provided`.
+- Retry feedback still offers the exact three modes, with structured transform first and raw patch
+  only as legacy non-CUDA fallback.
+- Runtime CUDA patch validation is now expressed as named structural preflight tracks:
+  edit-channel integrity, WMMA fragment shape/type, async-copy granularity/API shape, tile-local
+  shared-memory addressing, symbol lifecycle, complete shape graduation, and no-effect skeletons.
+- Materialized `candidate_transform` patches run structural preflight before git apply and before
+  compile/score execution.
+- Evolve-loop promotion is now persistent. Recurring promotable failure classes are written to
+  `attempts/preflight_tracks.json`, summarized as active hard preflight tracks, and loaded back into
+  command execution.
+- Prompt/context guidance no longer lists many historical "do not repeat X" patches. It points the
+  planner at transform families and structural failure classes, and names the realistic BF16 target
+  workload family: seq 4096/8192/16384/32768, total_tokens 32768, num_heads 16, head_dim 128, both
+  causal modes.
+- The parser now recovers explicit single-constant prose transforms like "change NAME from OLD to
+  NEW in candidates/.../*.cu" into `candidate_transform={op: set_constexpr_int, path, name, value}`.
+- Planning validation failures are classified into durable classes such as
+  `planning_missing_edit_payload`, `planning_no_patch_compile`, and `planning_edit_channel`, so
+  repeated planner-interface failures can promote like compile/runtime failures.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 176 tests.
+- `uv run --extra dev pytest`: passed, 229 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
