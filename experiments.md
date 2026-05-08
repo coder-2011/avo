@@ -6938,3 +6938,38 @@ Verification:
 - `uv run --extra dev pytest`: passed, 177 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.15: Scalar async-copy cooldown prompt
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after rejecting the synchronous Q-staging regression.
+- Determine whether blocking static Q/K/V staging moves the planner to a useful different patch.
+- If scalar async-copy remains a repeated planning failure, make the base prompt constraint clearer.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_sync_q_guard.json`.
+- The planner again failed validation after three attempts on scalar BF16
+  `__pipeline_memcpy_async` copies.
+- No candidate command ran, no patch was applied, no score payload was produced, and the lineage did
+  not change.
+
+Decision:
+
+- The scalar async-copy issue is no longer just a single retry-feedback problem; it keeps reappearing
+  after unrelated guards.
+- Added a base repo-context constraint that treats `cp.async` / `__pipeline_memcpy_async` as a
+  cooled-down direction unless the diff is a complete aligned 16-byte-group dataflow change with
+  exact current context and no scalar async calls.
+- Runtime knowledge records the cooldown so future loops should favor non-async structural patches
+  until the agent can express a valid vector-group async dataflow.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 88 tests.
+- `uv run --extra dev pytest`: passed, 177 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
