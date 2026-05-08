@@ -595,3 +595,84 @@ Tradeoffs and uncertainty:
 - The scorer now supports tiny smoke shapes for slow kernels. The default architecture
   benchmark remains unchanged, so full-suite results are still comparable to the original
   AVO plan.
+
+## 2026-05-08 - Checkpoint 2.1: steer agent context to the real CUDA attention seed
+
+Success criteria for this checkpoint:
+
+- Remove stale agent guidance that still preferred the identity CUDA smoke candidate.
+- Make local repo context prefer the first CUDA candidate that actually computes attention
+  math: `candidates/cuda_naive_attention_seed.py`.
+- Keep fallback behavior for older/smaller checkouts that only have the identity or Python
+  SDPA seeds.
+- Expand the Ampere knowledge seed with source-backed constraints that matter for the next
+  tiled-online-softmax step.
+- Verify the Anthropic planner now returns a bounded score command for the naive attention seed.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/agent.py`:
+  - added `_preferred_candidate_score_command(...)`;
+  - prefer the tiny BF16 `cuda_naive_attention_seed.py` score command when that candidate exists;
+  - fall back to `cuda_identity_seed.py`, then `torch_sdpa_seed.py`.
+- Updated `/home/ubuntu/avo-ampere/tests/test_agent.py`:
+  - assert repo context lists the naive attention seed;
+  - assert the preferred command points at the naive attention seed and tiny shape;
+  - assert fallback still chooses the identity candidate when the naive seed is absent.
+- Updated `/home/ubuntu/avo-ampere/knowledge/ampere.md` with:
+  - sm86 occupancy/register/shared-memory facts from NVIDIA's Ampere tuning guide;
+  - Ampere `cp.async` framing as the right replacement direction for Blackwell TMA ideas;
+  - FlashAttention-2 sm8x block-size heuristic evidence for head dimension 128;
+  - a local note that `cuda_identity_seed.py` is now only an extension/build smoke.
+- Updated `/home/ubuntu/avo-ampere/README.md` so the missing-work list no longer claims
+  there is no CUDA attention candidate at all; the missing work is now a tiled/performance
+  candidate beyond the naive seed.
+
+Online research notes:
+
+- Exa research on NVIDIA's Ampere tuning guide confirmed that compute capability 8.6 has
+  48 resident warps per SM, 64K 32-bit registers per SM, 16 resident thread blocks per SM,
+  100 KB shared memory per SM, and 99 KB maximum shared memory per block. This makes register
+  pressure, dynamic shared-memory opt-in, and occupancy explicit constraints for the A6000
+  search space.
+  Source: https://docs.nvidia.com/cuda/ampere-tuning-guide/
+- The same NVIDIA guide describes Ampere async global-to-shared copy support as an overlap
+  mechanism that avoids extra copy registers and can bypass L1. This supports orienting the
+  next real kernel step around `cp.async`, not Blackwell TMA.
+  Source: https://docs.nvidia.com/cuda/ampere-tuning-guide/
+- Exa research on FlashAttention-2 v2.8.3 found the sm8x block-size heuristic in
+  `flash_attn_interface.py`. For head dimension 128, sm86 is treated separately from sm80
+  and chooses smaller N-blocks in some cases. I logged this as search-space evidence rather
+  than copying FA2's policy.
+  Source: https://github.com/Dao-AILab/flash-attention/blob/v2.8.3/flash_attn/flash_attn_interface.py
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest tests/test_agent.py` in `/home/ubuntu/avo-ampere`: 17 passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 49 passed.
+- Live Anthropic planner smoke:
+  `uv run --extra agent python -m avo agent-plan --lineage /tmp/avo-agent-context-naive-lineage --knowledge knowledge/ampere.md --cwd /home/ubuntu/avo-ampere --env-file /home/ubuntu/avo/.env.local`
+  passed.
+  - Returned `files_to_inspect`:
+    - `candidates/cuda_naive_attention_seed.py`;
+    - `candidates/cuda_naive_attention/attention.cpp`;
+    - `candidates/cuda_naive_attention/attention_kernel.cu`.
+  - Returned bounded `next_command`:
+    `avo score --backend candidate --candidate candidates/cuda_naive_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+- Executed the planner-selected command:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_naive_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - `all_correct`: true.
+  - Non-causal BF16: max abs error `0.00390625`, 0.734 ms.
+  - Causal BF16: max abs error `0.015625`, 0.928 ms.
+  - Geomean: `1.4036513857070751e-05` TFLOPS.
+
+Tradeoffs and uncertainty:
+
+- This does not add a new kernel optimization. It fixes a control-plane hazard: the agent was
+  about to keep revisiting an obsolete build smoke instead of the first real attention-math
+  seed.
+- The next implementation step is still kernel work: a tiny tiled online-softmax candidate
+  with enough parallelism to replace the one-thread-per-row naive seed, while staying on
+  small shapes until BF16/FP32 correctness is boring.
