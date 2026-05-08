@@ -5019,3 +5019,48 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `f1e7a21b0f070d1de97057de70f41d4820ffab58`.
+
+## 2026-05-08 - Checkpoint 3.71: Correctness-breaking patch self-critique guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the warp-row WMMA probe.
+- Prevent patches from executing when their own decision text says they will break correctness.
+
+Research note:
+
+- Exa refreshed NVIDIA's Ampere tuning guide. The relevant constraints remain unchanged for A6000:
+  compile explicitly for `sm_86`, use Ampere async-copy/HMMA primitives rather than Blackwell
+  TMA/WGMMA, and respect compute capability 8.6 occupancy/shared-memory limits.
+
+Loop result:
+
+- The agent proposed a tiled online-softmax rescale patch.
+- The patch changed the correct invariant from
+  `output_acc = output_acc * old_scale + tile_acc * tile_scale` to
+  `output_acc = output_acc * old_scale + tile_acc`.
+- The patch applied and compiled successfully on `sm_86`, with ptxas reporting no spills.
+- Cleanup reverted the patch afterward because the command was compile-only and no lineage gate
+  decision was made.
+
+Reliability gap:
+
+- The decision risk text explicitly said the original formula was correct, the patch would break
+  correctness, and the direction should be rejected.
+- Existing self-invalid guards caught `will cause a compile error` and stale-code warnings, but did
+  not catch this correctness-breaking self-critique.
+
+Runtime change:
+
+- Planner validation now rejects non-empty patches when the decision text includes
+  `will break correctness` or `reject this direction`.
+- Added a regression test for the tiled-rescale self-critique pattern.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 54 passed.
+- `uv run --extra dev pytest`: 143 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
+  `df7b8a5399b52e3308f8eb9272ec64de51df89c5`.
