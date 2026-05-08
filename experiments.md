@@ -8270,3 +8270,43 @@ Verification:
 - `uv run --extra dev pytest`: passed, 220 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.45: Transform-channel retry feedback
+
+Success criteria for this checkpoint:
+
+- Run a follow-up bounded live loop after transform-mode preflight tightening.
+- If planning fails because the agent still confuses edit channels, improve retry feedback rather
+  than adding another CUDA-domain guard.
+- Verify with focused tests and full checks.
+
+Source refresh:
+
+- Exa refreshed structured-output retry patterns. The useful reliability pattern is to feed precise
+  validation errors back to the model so schema relationship failures are corrected on retry, rather
+  than accepting partial objects downstream. Source:
+  https://enricopiovano.com/blog/structured-outputs-tool-use-patterns
+
+Live loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_transform_preflight_tightening.json`.
+- Planning failed after three retries before any candidate command executed.
+- The final validation error was `candidate_patch and candidate_transform are mutually exclusive`;
+  the planner kept mixing the new structured transform channel with the legacy raw diff channel.
+- No score payload was produced and lineage stayed unchanged.
+
+Decision:
+
+- Retry feedback now has a dedicated branch for mutually exclusive edit channels.
+- The prompt now says structured-transform mode requires `candidate_patch` to be exactly the empty
+  string `""`.
+- Retry feedback also has a dedicated branch for `No edit;` decisions that carry edit payloads.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 128 tests.
+- `uv run --extra dev pytest`: passed, 222 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
