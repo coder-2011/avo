@@ -7887,3 +7887,39 @@ Verification:
 - `uv run --extra dev pytest`: passed, 201 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.37: Thread-0 row-state register guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the unused Q-preload skeleton guard.
+- If the planner proposes another unsafe register-row-state direction, reject the concrete pattern
+  before future compile or score steps.
+- Preserve the accepted direct-accumulation source and lineage.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_q_preload_skeleton_guard.json`.
+- The planner proposed moving `row_max`, `row_sum`, and `old_scale` from shared memory into local
+  per-thread arrays.
+- The patch did not apply: `git apply --check` failed with `error: corrupt patch at line 46`.
+- No compile, score, cleanup, or lineage update was needed because the patch never applied.
+
+Decision:
+
+- The direction also repeated a known unsafe register-row-state idea in a new shape:
+  `float row_max[kTile]`, `float row_sum[kTile]`, and `float old_scale[kTile]` were local per-thread
+  arrays, but only `threadIdx.x == 0` initialized them. Other row-owning threads would read their
+  own uninitialized local arrays if the patch compiled.
+- Runtime validation now rejects local MMA row-state arrays paired with `threadIdx.x == 0`
+  initialization as another per-thread-register row-state hazard.
+- Runtime knowledge records the corrupt patch and the row-state ownership issue.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 112 tests.
+- `uv run --extra dev pytest`: passed, 202 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
