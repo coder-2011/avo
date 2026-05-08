@@ -5663,3 +5663,40 @@ Verification:
 - `uv run --extra dev pytest`: 154 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.88: Head-dim128 shared alignment diagnosis
+
+Success criteria for this checkpoint:
+
+- Research the likely cause of the head_dim128 shared-path misaligned-address failure.
+- Record the local alignment invariant future patches must preserve.
+
+Research result:
+
+- Exa surfaced NVIDIA Ampere shared-memory limits, CUTLASS SM80 async-copy code, and cuBLASDx
+  performance guidance.
+- The useful recurring point is that vectorized/shared-memory paths should preserve alignment,
+  with NVIDIA/CUTLASS material repeatedly emphasizing 16-byte alignment for efficient copies and
+  shared-memory IO.
+
+Local diagnosis:
+
+- The warp-row `dot_product` uses `ScalarPack4` reinterpret loads when `head_dim` is divisible by
+  four.
+- The accepted K/V skew uses `kMaxHeadDim + 1`, so BF16 shared rows have a 129-element stride, or
+  258 bytes.
+- That stride does not preserve `ScalarPack4` alignment across rows, and it is also not 16-byte
+  aligned.
+- This explains why simply enabling the shared path at head_dim128 caused CUDA unknown and
+  misaligned-address failures.
+
+Decision:
+
+- Future head_dim128 shared-path attempts must fix row-stride alignment or use a scalar shared-row
+  dot path before raising `can_stage_shared`.
+- A safe direction is a stride that is a multiple of four BF16 elements for the current
+  `ScalarPack4`, or a multiple of eight BF16 elements when targeting 16-byte alignment.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
