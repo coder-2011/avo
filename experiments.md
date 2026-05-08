@@ -7744,3 +7744,53 @@ Verification:
 - `uv run --extra dev pytest`: passed, 195 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.34: Compile-only WMMA skeleton guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after missing decision-key retry feedback.
+- If the planner spends the step on a compile-only WMMA skeleton with no correctness or throughput
+  evidence, preserve the candidate source and add a narrow guard against the no-op pattern.
+- Keep the accepted direct-accumulation MMA lineage unchanged.
+
+Source refresh:
+
+- Exa refreshed the Dao-AILab SM80 FlashAttention mainloop before this run. The relevant
+  reinforcement was that the Ampere path uses `cp.async` staging, online softmax, O in
+  register-resident accumulator fragments, score rescaling, and PV accumulation directly into the
+  O accumulator. Source:
+  https://github.com/Dao-AILab/flash-attention/blob/main/hopper/mainloop_fwd_sm80.hpp
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_missing_key_feedback.json`.
+- The planner patched the warp-row seed with `mma.h`, shared BF16 Q/K buffers, and a
+  `wmma::accumulator` fragment, then ran a compile-only command.
+- NVCC succeeded, but the patch never ran `mma_sync` and never connected the fragment to the
+  online-softmax or PV dataflow. No correctness or throughput score was produced.
+- Cleanup reverse-applied the patch successfully. The source tree and lineage remained unchanged.
+
+Compile diagnostics:
+
+- BF16/Half instantiations used 48 registers, 1 barrier, 17024 bytes shared memory, 412 bytes
+  `cmem[0]`, and 224 bytes `cmem[4]`.
+- The float instantiation used 56 registers, 1 barrier, and 33536 bytes shared memory.
+- NVCC warned that `wmma_scores` was declared but never referenced.
+
+Decision:
+
+- Runtime validation now rejects patches whose own decision text says they do not affect correctness
+  or throughput.
+- Runtime validation now rejects WMMA compile skeletons that add fragments and `fill_fragment`
+  without any `mma_sync` or online-softmax dataflow.
+- Runtime knowledge records the compile-only WMMA detour and source refresh.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 107 tests.
+- `uv run --extra dev pytest`: passed, 197 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
