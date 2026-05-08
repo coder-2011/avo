@@ -2397,3 +2397,76 @@ Tradeoffs and decision:
   behavior. The current environment is a major mismatch and remains blocked for FA2 source builds.
 - No baseline lineage was seeded in this checkpoint; the next practical step is to provide a CUDA
   13.0 `nvcc` toolchain or use a Torch build compatible with the installed CUDA 12.9 toolkit.
+
+## 2026-05-08 - Checkpoint 3.15: Python CUDA root selection for baseline builds
+
+Success criteria for this checkpoint:
+
+- Provide a matching CUDA 13 `nvcc` without changing the system CUDA 12.9 toolkit.
+- Make the AVO baseline build environment choose the Python-installed CUDA root when it is
+  compatible with Torch and the ambient CUDA root is not.
+- Re-run the FA2 build far enough to verify it uses the CUDA 13 compiler, then record the remaining
+  practical build-time blocker honestly.
+
+Implementation:
+
+- Installed Python CUDA compiler packages into the runtime venv:
+  `nvidia-cuda-nvcc==13.0.88`, `nvidia-cuda-crt==13.0.88`, and `nvidia-nvvm==13.0.88`.
+  This placed `nvcc`, `cuda.h`, and `libdevice.10.bc` under
+  `/home/ubuntu/avo-ampere/.venv/lib/python3.12/site-packages/nvidia/cu13`.
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py`:
+  - `_baseline_build_env(...)` now detects a single Python-installed `nvidia/cu*/bin/nvcc` root;
+  - it checks that root's `nvcc` version against `torch.version.cuda`;
+  - it overrides an incompatible ambient CUDA root, such as `/usr/local/cuda-12.9`, only when the
+    Python CUDA root is compatible for PyTorch extension builds;
+  - the `baseline_build.settings` payload now reports `CUDA_HOME` and `CUDA_PATH`.
+- Updated `/home/ubuntu/avo-ampere/tests/test_cli.py` with coverage for Python CUDA root discovery,
+  compatible-root selection, and preserving an already-compatible CUDA environment.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md` with the CUDA 13 nvcc wheel workaround.
+- Retried FA2 installation with explicit `CUDA_HOME` from `_baseline_build_env(...)`:
+  `FLASH_ATTN_CUDA_ARCHS=80 MAX_JOBS=1 NVCC_THREADS=1 uv pip install flash-attn==2.8.3 --no-build-isolation`.
+  The build used the Python CUDA 13 `nvcc` and advanced into real CUDA compilation; it was stopped
+  after completing only 15 of 73 Ninja objects because serial compilation was too slow for this
+  checkpoint. `flash-attn` remained uninstalled. The partial log is in
+  `/tmp/avo-flash-attn-install-cu13.log`.
+
+Online research notes:
+
+- Exa found the PyPI page for `nvidia-cuda-nvcc`, maintained by the NVIDIA CUDA Installer Team,
+  showing CUDA 13.x nvcc wheels and dependencies on `nvidia-nvvm`, `nvidia-cuda-runtime`, and
+  `nvidia-cuda-crt`.
+  Source: https://pypi.org/project/nvidia-cuda-nvcc/
+- Exa found NVIDIA forum discussion explaining that CUDA pip wheels may require additional
+  environment setup for tool discovery. This supports AVO explicitly selecting the Python CUDA root
+  instead of relying on the host `CUDA_HOME`.
+  Source: https://forums.developer.nvidia.com/t/nvidia-cuda-nvcc-pip-wheel-installation/221307
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/cli.py tests/test_cli.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_cli.py` passed, 18 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 104 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere` and `/home/ubuntu/avo`.
+- Environment check:
+  `uv run --extra cuda python -m avo env` passed and reported `compatibility="exact"`,
+  `torch_cuda="13.0"`, `nvcc_cuda="13.0"`, and `CUDA_HOME` under the venv's `nvidia/cu13` root.
+- Package state:
+  `uv pip show flash-attn` still reports package not found; `uv pip show nvidia-cuda-nvcc`
+  reports version 13.0.88 installed.
+
+Tradeoffs and decision:
+
+- The Python CUDA root selection is limited to baseline build environments. It does not change the
+  local candidate CUDA compiler path used by the custom kernel compile path.
+- The full FA2 source build is now configuration-correct but operationally expensive. A later run
+  can either let the serial build finish, raise parallelism after measuring peak memory, or seed a
+  baseline from a compatible prebuilt wheel if one becomes available for this Python/Torch/CUDA
+  tuple.
+- No FA2 baseline lineage was seeded in this checkpoint.
