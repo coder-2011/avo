@@ -2252,3 +2252,74 @@ Tradeoffs and decision:
   run-specific artifacts, and the audit value is worth it.
 - This checkpoint improves reproducibility of future accepted score commits but does not itself
   improve kernel throughput.
+
+## 2026-05-08 - Checkpoint 3.13: conservative FA2 build defaults
+
+Success criteria for this checkpoint:
+
+- Tighten FlashAttention-2 build defaults for the actual A6000 pod rather than relying on optimistic
+  parallelism.
+- Preserve the Ampere-only build target (`FLASH_ATTN_CUDA_ARCHS=80`).
+- Keep caller-provided compile parallelism overrides possible.
+- Update docs/knowledge so baseline setup is less likely to exhaust host memory.
+- Record the failed/interrupted FA2 import preflight honestly.
+
+Implementation:
+
+- Attempted `uv run --extra baseline python -c 'import flash_attn; ...'` to check whether FA2 was
+  importable. `uv` started building `flash-attn==2.8.3`, the build was interrupted during the
+  session transition, no `flash-attn` process remained afterward, and `uv pip show flash-attn`
+  confirmed it was not installed.
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py`:
+  - `_baseline_build_env(...)` still forces `FLASH_ATTN_CUDA_ARCHS=80`;
+  - it now defaults `MAX_JOBS=1` and `NVCC_THREADS=1` when the caller did not explicitly set them.
+- Updated `/home/ubuntu/avo-ampere/tests/test_cli.py`:
+  - covered the new conservative defaults;
+  - covered preserving explicit `MAX_JOBS` and `NVCC_THREADS` overrides.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md` to use
+  `FLASH_ATTN_CUDA_ARCHS=80 MAX_JOBS=1 NVCC_THREADS=1` for baseline installation on this 32 GB
+  host.
+
+Online research notes:
+
+- Exa found a FlashAttention source-build guide that recommends `FLASH_ATTN_CUDA_ARCHS` to avoid
+  building unnecessary architectures and `MAX_JOBS` to control host-memory pressure. This supports
+  keeping the Ampere-only arch filter and explicitly limiting jobs.
+  Source: https://vccv.cc/en/article/flash-attn-compile.html
+- Exa found FlashAttention CUDA 13 installation issues where users report source builds for Python
+  3.12/CUDA 13 and no prebuilt wheel path in some combinations. This explains why the import check
+  started a source build instead of completing quickly.
+  Source: https://github.com/Dao-AILab/flash-attention/issues/2064
+- Exa found CUDA 13 / Torch 2.9+ FlashAttention install discussion showing wheel guessing can miss
+  and fall back to source build. This reinforces treating FA2 setup as a controlled build step, not
+  a cheap import check.
+  Source: https://github.com/Dao-AILab/flash-attention/issues/2008
+- Exa found FlashAttention build reports that `MAX_JOBS` does not fully bound memory because each
+  NVCC job can spawn additional threads, and that `MAX_JOBS * NVCC_THREADS` drives worst-case
+  memory use. This is the direct reason for defaulting both values to 1 on the 32 GB pod.
+  Source: https://github.com/Dao-AILab/flash-attention/issues/2051
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/cli.py tests/test_cli.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_cli.py` passed, 10 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 96 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+- Environment check:
+  `uv pip show flash-attn` reported package not found after the interrupted build, so no baseline
+  lineage was seeded in this checkpoint.
+
+Tradeoffs and decision:
+
+- `MAX_JOBS=1 NVCC_THREADS=1` will be slower, but it is safer for this 4-vCPU/32GB environment and
+  better aligned with unattended baseline setup.
+- We did not retry the full FA2 build immediately. The next baseline attempt should be an explicit,
+  monitored install/seed step using the conservative flags, not an incidental import check.
+- This checkpoint changes setup safety only; it does not yet produce an FA2 baseline score.
