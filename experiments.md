@@ -3469,3 +3469,75 @@ Tradeoffs and decision:
   more concrete for Anthropic retries.
 - The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
   `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.34: Harden patch planning and record naive baseline
+
+Success criteria for this checkpoint:
+
+- Continue bounded loop execution after the first invalid-patch retry fix.
+- Turn any remaining planning or patch-substrate failures into explicit runtime guardrails.
+- Record any new no-patch baseline scores that should not be repeated.
+
+Research refresh:
+
+- Exa primary-source refresh again pointed at the Ampere FA2 structure we already want:
+  NVIDIA CUTLASS CuTeDSL Ampere FA2 uses `cp.async`, tensor-core MMA, register pipelining,
+  and online softmax; Dao-AILab's SM80 forward path uses the same broad pattern with explicit
+  async-copy staging and tiled MMA.
+- This reinforces that useful candidate edits should move the warp-row or MMA footholds toward
+  those mechanisms, not keep scoring slow scalar references.
+
+Loop results and reliability fixes:
+
+- After runtime commit `bcb7b74`, the next loop still failed planning validation after three
+  retries with `candidate_patch must be non-empty when candidate_edit describes a code change`.
+- Runtime commit `6cbc376 fix: harden invalid patch retry contract` strengthened the tool schema,
+  prompt, retry hint, and validation error. Empty-patch decisions now get a clear two-mode contract:
+  raw `diff --git` patch for code changes, or `No edit; ...` for bounded diagnostics only.
+- The next loop produced a real `candidate_patch`, but it was based on hallucinated source context
+  and `git apply --check` rejected it.
+- Runtime commit `080c8dd feat: include candidate source context in planning` now adds bounded
+  excerpts of current candidate source files to the planner prompt so raw diffs can use real local
+  context.
+- The next loop produced a more plausible patch, but `git apply --check` still rejected the diff
+  as corrupt because the hunk line counts were wrong.
+- Runtime commit `08a1a51 fix: tolerate recounted candidate patch hunks` keeps the existing path,
+  symlink, binary, delete, rename, mode, and whitespace guards, but runs `git apply --recount` so
+  generated diffs with wrong hunk counts can still be checked and applied when their content is
+  otherwise valid.
+
+Naive baseline score:
+
+- After the recount fix, the loop made a valid no-edit diagnostic score:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_naive_attention_seed.py --seq-lens 128 --total-tokens 512 --num-heads 4 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+- The naive seed passed correctness in both causal modes.
+- Noncausal case: max_abs_error `0.00390625`, `127.4438705444336` ms,
+  `0.0010531516927932967` TFLOPS.
+- Causal case: max_abs_error `0.015625`, `72.09878540039062` ms,
+  `0.000930790492895549` TFLOPS.
+- Naive geomean: `0.000990082614345315` TFLOPS.
+- Gate result: rejected versus current best `0.10830947571120902` because this regressed geomean
+  throughput.
+- Runtime commit `5b267f5 docs: record naive baseline and patch recount` records the naive baseline
+  and the updated patch substrate in `knowledge/ampere.md`.
+
+Verification:
+
+- For `6cbc376`, full lint passed, full unit suite passed with 131 tests, and `git diff --check`
+  passed in `/home/ubuntu/avo-ampere`.
+- For `080c8dd`, full lint passed, full unit suite passed with 131 tests, and `git diff --check`
+  passed in `/home/ubuntu/avo-ampere`.
+- For `08a1a51`, full lint passed, full unit suite passed with 132 tests, and `git diff --check`
+  passed in `/home/ubuntu/avo-ampere`.
+- The docs-only runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `5b267f525166f0733f2801f491106ceeebaa4cf4`.
+
+Tradeoffs and decision:
+
+- The source-excerpt prompt increases input size, but it directly addresses invalid patches caused
+  by planning from filenames alone.
+- `git apply --recount` does not bypass candidate path or patch-type restrictions; it only tolerates
+  bad hunk lengths.
+- The naive seed should remain a correctness reference, not a performance branch. The current
+  lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit `07f1441`.
