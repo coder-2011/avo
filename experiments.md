@@ -5268,3 +5268,47 @@ Decision:
 Verification:
 
 - Runtime knowledge update passed `git diff --check`.
+
+## 2026-05-08 - Checkpoint 3.78: Pragma-only compile guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the async-copy alignment refresh.
+- Prevent scoreable performance-only patches from stopping at compile-only diagnostics.
+
+Loop result:
+
+- The agent proposed a warp-row V-accumulation unroll patch.
+- The patch added `#pragma unroll` before the `key_inner` V accumulation loops in both the shared
+  staging path and the global fallback path.
+- The patch applied, then `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu
+  --out-dir build/warp_v_accum_unroll` succeeded.
+- Cleanup reverse-applied the patch successfully.
+- No score payload was produced, so the lineage did not change.
+
+Compile result:
+
+- BF16 entry point: 48 registers, 1 barrier, 16896 bytes shared memory, no spills.
+- FP16 entry point: 48 registers, 1 barrier, 16896 bytes shared memory, no spills.
+- FP32 entry point: 56 registers, 1 barrier, 33280 bytes shared memory, no spills.
+
+Reliability gap:
+
+- The patch was correctness-neutral and explicitly targeted throughput, so a compile-only command
+  could not determine whether the change improved or regressed TFLOPS.
+- Compile-only checks remain useful for build-risk changes, but pragma-only or scheduler-only
+  performance patches should run a bounded candidate score.
+
+Runtime change:
+
+- Planner validation now rejects compile commands when the candidate patch adds only `#pragma unroll`
+  lines.
+- The repo context now tells the agent to score pragma-only or scheduler-only performance patches
+  instead of stopping at compile-only checks.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 58 passed.
+- `uv run --extra dev pytest`: 147 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
