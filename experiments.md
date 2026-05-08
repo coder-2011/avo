@@ -6462,6 +6462,71 @@ Verification:
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
 
+## 2026-05-08 - Checkpoint 4.06: Synchronous V staging regression
+
+Success criteria for this checkpoint:
+
+- Run one bounded Anthropic step after the synchronous K-staging regression guard.
+- If the proposed patch is scoreable, measure correctness and TFLOPS on the fixed
+  seq256/head_dim128 BF16 suite before accepting or rejecting it.
+- Keep the accepted kernel source unchanged if the patch regresses.
+- Add a narrow planner guard and knowledge note only for the exact regressed pattern.
+
+Source refresh:
+
+- Exa found NVIDIA's CUTLASS Ampere FlashAttention v2 example again as the most relevant search
+  reference: it combines `cp.async`, Ampere tensor-core MMA, register pipelining, online softmax,
+  and output rescaling. Source:
+  https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+- NVIDIA's Ampere tuning guide frames async global-to-shared copy as the Ampere mechanism for
+  explicit compute/data overlap while avoiding extra copy registers. Source:
+  https://docs.nvidia.com/cuda/ampere-tuning-guide/
+- NVIDIA's CUDA async-copy guide notes that async global-to-shared copies need a completion
+  mechanism, and shared data consumed by other threads still needs synchronization after the copy
+  completes. Source:
+  https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/async-copies.html
+
+Loop result:
+
+- The agent proposed static double-buffered V staging for the current MMA seed:
+  `v_shared[2][kTile * kHeadDim]`, cooperative warp loads of the current and next 16x128 BF16 V
+  tiles, and PV `wmma::load_matrix_sync` from `v_shared[current_buffer]`.
+- The bounded step compiled only and cleaned up the transient patch.
+- Compile diagnostics were clean: no spills, 40 registers, 1 barrier, 26304 bytes shared memory,
+  400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+
+Score result:
+
+- Manual reapplication passed correctness for both causal modes.
+- Command: `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`.
+- Geomean was `0.31531656344385717` TFLOPS, below the accepted best
+  `0.4924015757468769` TFLOPS.
+
+Score details:
+
+- Noncausal: max_abs_error `0.001953125`, median `1.320255994796753 ms`,
+  `0.4066415256706702` TFLOPS, samples
+  `[1.320255994796753, 1.4197759628295898, 1.2469120025634766]`.
+- Causal: max_abs_error `0.0078125`, median `1.0978879928588867 ms`,
+  `0.24450167753542637` TFLOPS, samples
+  `[1.0978879928588867, 1.2736639976501465, 1.0158400535583496]`.
+
+Decision:
+
+- Reverted the manual V-staging patch. It preserved correctness but inserted synchronous shared
+  memory traffic without useful overlap, so it was slower than direct global V loads.
+- Runtime validation now rejects repeat static `v_shared[2]` MMA V staging unless the patch adds
+  real async-copy overlap.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 79 tests.
+- `uv run --extra dev pytest`: passed, 168 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
+
 ## 2026-05-08 - Checkpoint 4.05: Synchronous K staging regression
 
 Success criteria for this checkpoint:
