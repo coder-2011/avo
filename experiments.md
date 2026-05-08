@@ -5170,3 +5170,30 @@ Verification:
 - `git diff --check`: passed.
 - Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
   `0aef1f375f481162c8262ec9b9d84e2c47b57f8c`.
+
+## 2026-05-08 - Checkpoint 3.75: Official CUDA async-copy API refresh
+
+Success criteria for this checkpoint:
+
+- Cross-check the local pipeline-header finding against official NVIDIA docs.
+- Record the actionable API spelling and alignment guidance before another loop.
+
+Research result:
+
+- Exa found NVIDIA's CUDA Programming Guide sections for advanced kernel programming and pipelines,
+  plus the CCCL/libcu++ `cuda::memcpy_async` reference.
+- The primitive API is documented as function-style `__pipeline_memcpy_async`,
+  `__pipeline_commit`, and `__pipeline_wait_prior(N)`.
+- The higher-level pipeline API uses `cuda::pipeline` with producer acquire, `cuda::memcpy_async`,
+  producer commit, and consumer wait.
+- On Ampere+, aligned global-to-shared `cuda::memcpy_async` can lower to `cp.async`.
+
+Decision:
+
+- Keep rejecting templated `__pipeline_wait_prior<...>` patches.
+- Keep requiring 16-byte grouped async-copy candidates for BF16 tiles when the intent is useful
+  Ampere `cp.async` staging rather than scalar copy noise.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
