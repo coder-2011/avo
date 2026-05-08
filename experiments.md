@@ -5878,3 +5878,53 @@ Verification:
 - `uv run --extra dev pytest`: 160 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.94: Manual MMA head_dim32 compile/score proof
+
+Success criteria for this checkpoint:
+
+- Manually complete the repeated MMA head_dim32 two-chunk direction after generated patches failed
+  on stale fragments and invalid WMMA score shapes.
+- Verify that the CUDA seed compiles and scores correctly on the tiny head_dim32 smoke shape.
+- Align the agent validator, repo context, and tests with the new committed MMA seed shape.
+
+Runtime change:
+
+- The MMA seed now uses `kHeadDim = 32`.
+- QK keeps a valid 16x16x16 score accumulator and accumulates two 16-wide chunks with explicit
+  `__nv_bfloat16` WMMA matrix fragments.
+- PV also runs two 16-wide chunks, stores each chunk at the row-major column offset
+  `&pv_tile[chunk * 16]`, and uses a 32-wide leading dimension.
+- `pv_tile` and `output_acc` are widened to 16x32 while `scores` and `probabilities` remain 16x16.
+- The wrapper and planner now advertise the unpatched MMA smoke cap as seq_len 16/32,
+  head_dim 32, total_tokens <= 32, and num_heads 1.
+- Patched MMA score attempts beyond the current head_dim32 smoke still require an `avo compile`
+  build-check before scoring.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 72 passed.
+- `uv run --extra dev pytest`: 161 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- `uv run --extra cuda python -m avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/manual_mma_head_dim32`: passed on sm86 with no spills, 40 registers, 1 barrier,
+  5824 bytes shared memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+- `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 32 --total-tokens 32 --num-heads 1
+  --head-dim 32 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`:
+  all_correct true, geomean `0.0001245601243057133` TFLOPS.
+
+Score details:
+
+- Noncausal: correct, max_abs_error `0.00390625`, median `0.74099200963974 ms`,
+  `0.00017688719756063954` TFLOPS, samples
+  `[0.74099200963974, 0.6902719736099243, 0.8248639702796936]`.
+- Causal: correct, max_abs_error `0.00390625`, median `0.7471680045127869 ms`,
+  `8.771253533900277e-05` TFLOPS, samples
+  `[0.7471680045127869, 0.6773759722709656, 0.7756479978561401]`.
+
+Decision:
+
+- This is structural correctness progress, not a lineage improvement. The workload signature is
+  seq32/head_dim32 and is not comparable to the current seq256/head_dim128 warp-row best.
