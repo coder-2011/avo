@@ -7414,3 +7414,41 @@ Verification:
 - `uv run --extra dev pytest`: passed, 188 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.26: Attempt-history payload filtering
+
+Success criteria for this checkpoint:
+
+- Prevent loop summary JSON files and manual score captures in `attempts/` from polluting the agent's
+  recent-attempt prompt.
+- Preserve the existing per-step attempt summaries and supervisor signals for real `EvolutionStep`
+  records.
+- Verify the fix with a regression test and the full runtime suite.
+
+Observation:
+
+- The `attempts/` directory intentionally contains both timestamped per-step records and local
+  convenience files such as `loop_after_*.json`.
+- `summarize_attempt_history` previously considered every `*.json` before applying the recent
+  history limit, so loop summaries and manual score captures could crowd out real step records and
+  produce placeholder text like `<missing command>` / `<missing hypothesis>`.
+- This matched earlier planner confusion about recent attempts sharing missing command/hypothesis
+  fields.
+
+Decision:
+
+- Runtime attempt-history summarization now filters for real step payloads before applying the
+  recent-attempt limit.
+- A valid step payload must have an `attempt` object with both `decision` and `command_result`
+  objects.
+- Loop summary JSON and score-wrapper JSON are ignored by the prompt summary and supervisor signal.
+
+Verification:
+
+- Added `test_summarize_attempt_history_ignores_loop_and_score_json`.
+- `uv run --extra dev pytest tests/test_evolve.py -q`: passed, 37 tests.
+- `uv run --extra dev pytest`: passed, 189 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Manual summary check on the live `attempts/` directory now reports only timestamped step records
+  and no `<missing command>` placeholders.
