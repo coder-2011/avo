@@ -5700,3 +5700,45 @@ Decision:
 Verification:
 
 - Runtime knowledge update passed `git diff --check`.
+
+## 2026-05-08 - Checkpoint 3.89: MMA score-fragment K32 guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the head_dim128 shared-path alignment diagnosis.
+- Record the next MMA head_dim32 compile failure precisely enough to avoid repeating it.
+- Add a narrow validator guard that does not block valid widened PV/output fragments.
+
+Loop result:
+
+- The agent switched to the MMA seed and proposed a compile-first head_dim32 two-chunk WMMA patch.
+- The patch updated `SMOKE_HEAD_DIM` and `kHeadDim` to 32, widened `pv_tile` and `output_acc` to
+  `kTile * kHeadDim`, removed the stale single-chunk QK code, and used two 16-wide chunks for QK
+  and PV.
+- The patch applied, then `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/mma_head_dim_32_two_chunk` failed.
+- Cleanup reverse-applied the patch successfully, and the lineage did not change.
+
+Compile failure:
+
+- NVCC rejected `wmma::fragment<wmma::accumulator, kTile, kTile, kHeadDim, float>` after
+  `kHeadDim = 32`.
+- The instantiated shape was `fragment<accumulator, 16, 16, 32, float>`, which is incomplete or
+  unsupported for this WMMA score accumulator.
+- The correct direction remains two 16-wide QK fragments that accumulate into a valid 16x16 score
+  accumulator, not a score accumulator whose K dimension is 32.
+
+Runtime change:
+
+- Planner validation now rejects candidate patches that introduce the unsupported symbolic
+  `kTile,kTile,kHeadDim` score accumulator after setting `kHeadDim = 32`.
+- It also rejects the literal `fragment<accumulator, 16, 16, 32, float>` form.
+- The guard intentionally does not reject valid PV/output accumulator shapes such as
+  `kTile,16,kTile`.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 67 passed.
+- `uv run --extra dev pytest`: 156 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
