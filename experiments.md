@@ -8814,3 +8814,61 @@ Verification:
 - `uv run --extra dev pytest`: passed, 256 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.55: Exact pending-transform follow-up and seq4096 lane
+
+Success criteria for this checkpoint:
+
+- Fix the planner-interface failure where a compiled structured transform is referenced in prose
+  but omitted from the follow-up score payload.
+- Re-run a bounded loop from the seq2048 source and try to establish the first target-shape lane
+  at seq4096.
+- Preserve any accepted seq4096 source state and update validation constants, tests, README, and
+  knowledge notes.
+
+Problem:
+
+- `attempts/loop_after_seq2048_lane.json` did compile-check the seq4096 structured batch
+  (`kMaxSeqLen=4096`, add `4096` to `SMOKE_SEQUENCES`) successfully, with no spills, 40 registers,
+  1 barrier, and 9920 bytes shared memory.
+- The next planner turn then tried to score "the compiled seq4096 transform" while omitting the
+  exact `candidate_transform`, so validation rejected it as a missing edit payload. The bounded
+  loop stopped without a score.
+
+Decision:
+
+- Attempt-history follow-up signals now include the exact compact pending `candidate_transform`
+  JSON. This gives the planner a concrete object to reuse instead of paraphrasing the transform.
+- Validation feedback for missing edit payloads now explicitly says that a follow-up score for a
+  compiled transform must include the exact `candidate_transform` object from the follow-up signal.
+- Added tests that attempt history includes the pending transform JSON even after an intervening
+  planning failure, plus feedback coverage for the new guidance.
+
+Accepted seq4096 lane:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_pending_transform_json.json --timeout-s 900 --env-file ../avo/.env.local`
+- Nested lineage commit: `7162462` (`evolve: accept candidate`).
+- Workload: `seq_len=4096`, `total_tokens=32768`, `num_heads=16`, `head_dim=128`, BF16, both causal
+  modes, `trials=3`, `warmup=1`, `repeats=1`.
+- Noncausal: max error `0.0009765625`, median `103.79443359375 ms`,
+  `10.59316564199843` TFLOPS, timing CV `0.013159526868716758`.
+- Causal: max error `0.0078125`, median `102.7823715209961 ms`,
+  `5.348736419996861` TFLOPS, timing CV `0.0031471738936156303`.
+- Geomean: `7.527287085824243` TFLOPS.
+- Gate decision: accepted with reason `candidate established benchmark case set`.
+
+Decision:
+
+- Runtime source now carries `kMaxSeqLen=4096` and wrapper
+  `SMOKE_SEQUENCES={16, 32, 64, 128, 256, 1024, 2048, 4096}`.
+- Agent-side current MMA base sequences now include 4096, no-edit MMA scores below seq4096 are
+  treated as below the accepted validation lane, and the exact seq4096 no-edit score is recorded.
+- README and knowledge notes now describe seq4096 as the current accepted MMA lane.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_evolve.py::test_summarize_attempt_history_requests_score_after_compile_only_transform tests/test_evolve.py::test_summarize_attempt_history_keeps_compile_followup_after_planning_failure tests/test_agent.py::test_decision_feedback_explains_empty_patch_validation_error -q`: passed, 3 tests.
+- `uv run --extra dev pytest`: passed, 256 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
