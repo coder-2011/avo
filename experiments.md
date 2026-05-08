@@ -3230,3 +3230,56 @@ Tradeoffs and decision:
   attempt and become history for the next prompt instead of mutating the workspace.
 - The next useful step is to see whether the attempt history now pushes the agent into either a
   real candidate patch or a bounded score that can affect lineage.
+
+## 2026-05-08 - Checkpoint 3.29: Compile diagnostics now emit ptxas resources
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the structured planning failure.
+- If the agent chooses a legitimate compile diagnostic, make sure the command produces the
+  resource data the agent expects.
+
+Loop result before the fix:
+
+- The agent selected a no-patch compile diagnostic for
+  `candidates/cuda_warp_rows_attention/attention_kernel.cu`.
+- The decision expected ptxas resource statistics for register usage and shared memory before
+  adding WMMA complexity.
+- The compile succeeded, but `stderr_tail` was empty because `avo compile` did not request ptxas
+  verbosity.
+- No lineage commit was created; nested lineage remained at `07f1441`.
+
+Runtime improvements:
+
+- Runtime commit `eeaa4d8 feat: include ptxas stats in compile output` adds
+  `--ptxas-options=-v` to `avo compile`.
+- A real compile of the warp-row kernel now reports:
+  - BF16 entry point: 48 registers, 1 barrier, 16896 bytes shared memory, no spills.
+  - Half entry point: 48 registers, 1 barrier, 16896 bytes shared memory, no spills.
+  - FP32 entry point: 56 registers, 1 barrier, 33280 bytes shared memory, no spills.
+- Runtime commit `6c70869 docs: record warp row ptxas baseline` stores those resource numbers in
+  `knowledge/ampere.md` for future agent prompts.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/compile.py tests/test_compile.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_compile.py` passed, 2 tests.
+- Real compile:
+  `uv run --extra cuda python -m avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu --out-dir build/ptxas_check`
+  passed and returned ptxas resource output.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 126 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `6c70869cd2173a03b2ede7fec5af5a4bbbd73a6f`.
+
+Tradeoffs and decision:
+
+- This keeps compile diagnostics useful without broadening the command allowlist.
+- The ptxas numbers are not a candidate improvement by themselves, but they give the next kernel
+  patch a concrete register/shared-memory baseline.
