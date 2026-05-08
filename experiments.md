@@ -7667,3 +7667,44 @@ Verification:
 - `uv run --extra dev pytest`: passed, 193 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.32: Regressed Q-fragment preload guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the stride-20 probability guard.
+- Let a structurally new QK scheduling patch score if it clears validation.
+- If it preserves correctness but regresses throughput, record the score and reject exact repeats.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_probability_stride20_guard.json`.
+- The planner proposed a Q-fragment software-pipeline patch using `q_frag_next`, assigning
+  `q_frag = q_frag_next`, and loading the next Q fragment at the end of each QK chunk.
+- The patch applied, scored, and cleanup reverse-applied it successfully.
+- The lineage did not change.
+
+Score result:
+
+- Correctness passed for both causal modes.
+- Geomean regressed to `0.4215966561800913` TFLOPS versus the current best
+  `0.5772885607891738`.
+- Noncausal: max error `0.001953125`, median `0.9138240218162537` ms,
+  `0.5874992330940834` TFLOPS.
+- Causal: max error `0.0078125`, median `0.8872640132904053` ms,
+  `0.3025429319560828` TFLOPS.
+- Gate decision: rejected, reason `candidate regressed geomean throughput`.
+
+Decision:
+
+- Runtime validation now rejects exact QK `q_frag_next` preload-chain repeats.
+- Runtime knowledge records the correctness-preserving throughput regression.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 104 tests.
+- `uv run --extra dev pytest`: passed, 194 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
