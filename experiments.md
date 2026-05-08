@@ -2683,3 +2683,64 @@ Tradeoffs and decision:
   repeatedly describing that edit without providing a patch.
 - `avo compile` is still compile-only and produces no score payload, so it will not enter lineage
   by itself. It is now a useful bounded diagnostic instead of an environment false negative.
+
+## 2026-05-08 - Checkpoint 3.19: Accepted warp-row smoke baseline
+
+Success criteria for this checkpoint:
+
+- Continue the bounded loop after the decision guardrails and compile fixes.
+- Use the supervisor signal from repeated unaccepted attempts to reset away from the MMA
+  head-dimension expansion dead end.
+- Establish a second accepted lineage candidate from a different CUDA seed.
+
+Rejected discovery before acceptance:
+
+- The first post-guardrail loop did reset strategy to `candidates/cuda_warp_rows_attention_seed.py`,
+  but it tried production-like `seq_len=1024`, `head_dim=128`.
+- The warp-row wrapper rejected that command with:
+  `RuntimeError: cuda_warp_rows_attention_seed is a tiny multi-row correctness seed; got
+  seq_len=1024, head_dim=128`.
+- The source contract is `seq_len <= 128` and `head_dim <= 128`, so the runtime knowledge file
+  was updated and pushed in commit `1a61443 docs: clarify warp-row smoke shape`.
+
+Accepted command:
+
+`uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge
+knowledge/ampere.md --attempts-dir benchmarks/attempts --loop-json benchmarks/latest-loop.json
+--max-steps 1 --timeout-s 300 --env-file ../avo/.env.local`
+
+The agent selected:
+
+`avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens
+64 --total-tokens 64 --num-heads 1 --head-dim 32 --dtype bf16 --causal both --repeats 1 --warmup
+1 --timeout-s 300`
+
+Result:
+
+- Gate decision: accepted.
+- Acceptance reason: candidate passed correctness and throughput gate.
+- Previous best geomean: `6.23954365882066e-05` TFLOPS.
+- Candidate geomean: `0.0005428703821737525` TFLOPS.
+- Noncausal case: seq_len 64, BF16, head_dim 32, max_abs_error `0.00390625`,
+  `0.5724800229072571` ms, `0.0009158188565908014` TFLOPS.
+- Causal case: seq_len 64, BF16, head_dim 32, max_abs_error `0.0078125`,
+  `0.814624011516571` ms, `0.00032179753640206504` TFLOPS.
+- Benchmark environment: Torch `2.11.0+cu130`, CUDA `13.0`, Python `3.12.13`,
+  NVIDIA RTX A6000, `sm_86`.
+
+Lineage artifacts:
+
+- Nested lineage commit: `fe06c52 evolve: accept candidate`.
+- `scores/latest.json` now reflects the warp-row score.
+- Accepted source snapshots were written under `sources/latest/`:
+  - `candidates/cuda_warp_rows_attention_seed.py`
+  - `candidates/cuda_warp_rows_attention/attention.cpp`
+  - `candidates/cuda_warp_rows_attention/attention_kernel.cu`
+
+Tradeoffs and decision:
+
+- This accepted candidate is not a code improvement; it is a better existing seed baseline on a
+  valid smoke shape.
+- The current lineage best now represents the warp-row seed at `seq_len=64`, `head_dim=32`. Future
+  accepted steps must match or improve `0.0005428703821737525` geomean TFLOPS while preserving
+  correctness.
