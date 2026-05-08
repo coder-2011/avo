@@ -3836,3 +3836,43 @@ Tradeoffs and decision:
 - The current accepted seq256 lineage stays as the active comparison suite. Future optimization
   candidates need to score that same case set unless we deliberately reseed the benchmark suite.
 - This makes the throughput gate stricter and prevents shape-only TFLOPS inflation.
+
+## 2026-05-08 - Checkpoint 3.41: Verify fixed-case gate rejects seq512 shape-only score
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop with the fixed-case gate active.
+- Confirm shape-only workload growth no longer enters lineage even if TFLOPS increases.
+
+Loop result:
+
+- The agent patched `MAX_SMOKE_SEQUENCE` from 256 to 512 in
+  `candidates/cuda_warp_rows_attention_seed.py` and scored:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 512 --total-tokens 2048 --num-heads 4 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+- The score passed correctness in both causal modes.
+- Noncausal case: max_abs_error `0.001953125`, `2.167423963546753` ms,
+  `0.9907999930414525` TFLOPS.
+- Causal case: max_abs_error `0.015625`, `1.4129600524902344` ms,
+  `0.7599236950171464` TFLOPS.
+- Candidate geomean: `0.8677167693061046` TFLOPS.
+- Gate result: rejected despite higher TFLOPS because benchmark cases differed from the current
+  seq256 best.
+- Cleanup result: checked reverse patch application succeeded and restored the runtime worktree.
+
+Knowledge update:
+
+- Runtime commit `88e61bd docs: record rejected shape-only seq512 score` records that seq512 passed
+  correctness but must not be treated as a gate improvement unless the benchmark suite is
+  deliberately reseeded.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `88e61bd3ccb0513264c8033834fdddc8f3cb73c2`.
+
+Tradeoffs and decision:
+
+- The fixed-case gate did exactly what it should: kept lineage at `cfe5b45` / `0.4012802607933843`
+  while still preserving useful correctness information about seq512.
+- The current optimization target remains the accepted seq256 case signature.
