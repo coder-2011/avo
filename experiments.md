@@ -6840,3 +6840,40 @@ Verification:
 - `uv run --extra dev pytest`: passed, 174 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.13: Sync K-staging retry feedback
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after scalar async-copy retry hardening.
+- Check whether the planner moves to a structurally different candidate.
+- If it repeats a measured regression class during planning, improve targeted retry feedback.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_scalar_retry_hardening.json`.
+- The planner no longer failed on scalar BF16 async-copy validation.
+- It instead failed validation after three attempts by repeating synchronous MMA K shared-memory
+  staging.
+- No candidate command ran, no patch was applied, no score payload was produced, and the lineage did
+  not change.
+
+Decision:
+
+- The scalar async-copy hardening narrowed one repeated failure mode but exposed another: the planner
+  still needed explicit retry feedback for the already measured sync-K regression.
+- Runtime validation already rejected the bad patch, so the change is limited to clearer feedback.
+- Added retry feedback saying not to retry static `k_shared` MMA K staging; a corrected K-staging
+  patch must add real async-copy/double-buffered overlap, otherwise choose a different non-K-staging
+  patch.
+- Added matching feedback for the analogous static `v_shared[2]` MMA V-staging regression.
+- Runtime knowledge records that later loops should not keep retrying static K staging.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 87 tests.
+- `uv run --extra dev pytest`: passed, 176 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
