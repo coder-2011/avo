@@ -5197,3 +5197,46 @@ Decision:
 Verification:
 
 - Runtime knowledge update passed `git diff --check`.
+
+## 2026-05-08 - Checkpoint 3.76: No-op async-copy stub guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording official CUDA async-copy API guidance.
+- Prevent compile-only patches that add empty, uncalled helper stubs as false progress.
+
+Loop result:
+
+- The agent proposed a warp-row async-copy API proof patch.
+- The patch added `cuda_pipeline_primitives.h`, small wrapper functions for
+  `__pipeline_memcpy_async`, `__pipeline_commit`, and `__pipeline_wait_prior`, plus an empty
+  `async_copy_tile_kv` helper.
+- The patch applied, then `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu
+  --out-dir build/warp_async_copy_api_proof` failed.
+- Cleanup reverse-applied the patch successfully.
+
+Compile failure:
+
+- The added helper used `scalar_t` outside a templated helper or kernel context.
+- The compile output then cascaded into syntax errors around the existing score path.
+
+Reliability gap:
+
+- The decision risk text admitted the `async_copy_tile_kv` stub was empty, not called, and could not
+  affect correctness or throughput.
+- Such patches are compile-only noise because prior checkpoints already proved the async-copy API
+  header and wrapper availability.
+
+Runtime change:
+
+- Planner validation now rejects non-empty patches whose own decision text says the patch is not yet
+  called, has an empty stub, or cannot affect correctness or throughput.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 57 passed.
+- `uv run --extra dev pytest`: 146 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
+  `177d640cc221f7f1b3f9df7873bb52263b6f4181`.
