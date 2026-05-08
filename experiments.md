@@ -7173,3 +7173,44 @@ Verification:
 - `uv run --extra dev pytest`: passed, 183 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.21: Malformed Q-preload fragment guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after compile out-dir retry feedback.
+- Let compile/check gates handle any patch that clears decision validation.
+- If compile fails due to a syntactic pattern the decision already warned about, tighten the
+  decision validator for that concrete pattern.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_out_dir_feedback.json`.
+- The planner proposed a Q-fragment preload patch and used a valid `--out-dir build/mma_q_preload`.
+- The patch applied, then compile failed.
+- Cleanup reverse-applied the patch successfully.
+- No score payload was produced and the lineage did not change.
+
+Compile result:
+
+- NVCC rejected `wmma::fragment<wmma::matrix_a, kTile, kTile, 16, wmma::row_major> q_frag_chunk`
+  because the matrix fragment omitted the required element type.
+- The decision risk text also said `Do not use this diff`, so it should have been rejected as
+  self-invalid before patch application.
+
+Decision:
+
+- Added `do not use this diff` and `would fail compilation` to the self-rejecting phrase list.
+- Runtime validation now rejects WMMA matrix A/B fragment declarations that jump directly from the
+  K dimension to `wmma::row_major` / `wmma::col_major` without an element type such as
+  `__nv_bfloat16`.
+- Runtime knowledge records the malformed Q-preload fragment failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 96 tests.
+- `uv run --extra dev pytest`: passed, 185 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
