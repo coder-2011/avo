@@ -5312,3 +5312,48 @@ Verification:
 - `uv run --extra dev pytest`: 147 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.79: Tiled wrapper-cap-only score guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop with the pragma-only score guard in place.
+- Prevent tiled larger-shape scores that only raise wrapper caps without fixing the kernel.
+
+Loop result:
+
+- The agent proposed a tiled reset attempt for `candidates/cuda_tiled_attention_seed.py`.
+- The decision text claimed an online-softmax output rescaling fix, but the patch changed only
+  `MAX_SMOKE_SEQUENCE` and `MAX_SMOKE_HEAD_DIM` wrapper caps.
+- The patched candidate scored `seq_len=64`, `head_dim=64`, `total_tokens=256`, `num_heads=4`,
+  BF16, both causal modes.
+- Cleanup reverse-applied the wrapper patch successfully.
+- The lineage did not change.
+
+Score result:
+
+- Noncausal failed correctness with `max_abs_error=0.6171875`, median `0.9199039936065674 ms`,
+  and `0.0` TFLOPS.
+- Causal failed correctness with `max_abs_error=0.2646484375`, median `0.7273600101470947 ms`,
+  and `0.0` TFLOPS.
+- Gate rejected the candidate because it failed correctness.
+
+Reliability gap:
+
+- The tiled kernel is only validated at the tiny `seq_len=16`, `head_dim=16`, `total_tokens=16`,
+  `num_heads=1` smoke shape.
+- Raising wrapper caps alone does not address the known larger-shape tiled correctness failure.
+
+Runtime change:
+
+- Planner validation now rejects tiled scores outside the tiny validated shape when the patch only
+  changes `candidates/cuda_tiled_attention_seed.py` wrapper caps.
+- The repo context now tells the agent that larger tiled scores need a kernel change, not only a
+  wrapper-cap edit.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 59 passed.
+- `uv run --extra dev pytest`: 148 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
