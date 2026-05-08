@@ -2611,3 +2611,75 @@ Tradeoffs and decision:
   The useful output is a known-good source snapshot and a concrete baseline gate threshold.
 - Future loop attempts now need to match or improve `6.23954365882066e-05` geomean TFLOPS on the
   same smoke gate, so regressions should be rejected and cleaned up by the patch cleanup path.
+
+## 2026-05-08 - Checkpoint 3.18: Agent decision and compile guardrails
+
+Success criteria for this checkpoint:
+
+- Let the agent continue after the accepted MMA seed baseline and capture any bad-loop behavior.
+- Convert repeated invalid autonomous decisions into validation feedback instead of wasted score
+  or compile commands.
+- Make `avo compile` useful for CUDA candidate sources on this CUDA 13/Torch 2.11 environment.
+
+Rejected loop discoveries:
+
+- The first post-baseline loop step tried to score the MMA seed at `head_dim=32` with no patch.
+  The wrapper correctly rejected this because the current MMA seed accepts only sequence lengths
+  16 or 32 with `head_dim=16`.
+- The next loop step said it would extend/update the kernel and wrapper for `head_dim=32`, but
+  still returned an empty `candidate_patch`. The orchestrator executed the command because the
+  decision parser only checked patch syntax, not consistency between the proposed edit and patch.
+- After adding a knowledge note, the agent tried `avo compile --candidate ...`, which is not a
+  valid `avo compile` command.
+- After command-argument validation was tightened, the agent tried
+  `avo compile --source candidates/cuda_mma_attention_seed.py --out-dir build/mma_inspect`.
+  This is the wrong source type because `avo compile` passes `--source` directly to `nvcc`.
+- After source-path validation was tightened, the agent used the correct `.cu` source:
+  `candidates/cuda_mma_attention/attention_kernel.cu`. That exposed a real compile-path gap:
+  `avo compile` used ambient `/usr/local/cuda-12.9` and lacked PyTorch/Python include paths.
+
+Runtime changes:
+
+- Pushed runtime commit `2beabef docs: clarify mma smoke shape`, making the MMA smoke contract
+  explicit in `knowledge/ampere.md`: seq_len 16/32, head_dim 16 only unless a candidate patch
+  updates the wrapper and kernel first.
+- Pushed runtime commit `28411ec fix: tighten agent decision boundaries`.
+- Agent decision parsing now rejects an empty `candidate_patch` when `candidate_edit` describes a
+  code change such as extending, updating, modifying, or fixing a candidate.
+- `next_command` validation now checks basic subcommand arguments:
+  - `avo compile` rejects `--candidate` and requires `--source` plus `--out-dir`;
+  - compile sources must be repo-relative `.cu` files under `candidates/`;
+  - candidate scores require `--backend candidate --candidate ...`;
+  - candidate score paths must be repo-relative `.py` files under `candidates/`.
+- `avo compile` now prepares the same CUDA 13 torch-extension environment used by candidate seeds,
+  forwards PyTorch/Python/CUDA include directories, and adds `--expt-relaxed-constexpr` for parity
+  with PyTorch extension compilation.
+- The PyTorch include helper needed compatibility handling because Torch `2.11.0+cu130` exposes
+  `torch.utils.cpp_extension.include_paths(device_type="cuda")`, not the older `cuda=True` form.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py avo/cli.py avo/compile.py tests/test_agent.py
+  tests/test_compile.py tests/test_cli.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py tests/test_compile.py tests/test_cli.py` passed,
+  55 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 114 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Manual compile parity check:
+  `uv run --extra cuda python -m avo compile --source
+  candidates/cuda_mma_attention/attention_kernel.cu --out-dir build/mma_inspect --timeout-s 180`
+  passed. The emitted command used the venv CUDA 13 `nvcc`, the A6000 `sm_86` gencode,
+  PyTorch/Python/CUDA include directories, and `--expt-relaxed-constexpr`.
+
+Tradeoffs and decision:
+
+- These changes do not make the MMA seed support `head_dim=32`; they prevent the loop from
+  repeatedly describing that edit without providing a patch.
+- `avo compile` is still compile-only and produces no score payload, so it will not enter lineage
+  by itself. It is now a useful bounded diagnostic instead of an environment false negative.
