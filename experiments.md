@@ -6877,3 +6877,64 @@ Verification:
 - `uv run --extra dev pytest`: passed, 176 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.14: Synchronous Q staging regression
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after sync-staging retry feedback.
+- If the planner produces a materially different scoreable idea, test it manually if the generated
+  patch only fails on stale context.
+- Preserve the kernel only if it beats the accepted seq256/head_dim128 MMA best.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_sync_retry_feedback.json`.
+- The planner proposed synchronous shared-memory staging for the full 16x128 Q tile:
+  `q_shared[kTile * kHeadDim]`, cooperative load once before the K loop, and QK
+  `wmma::load_matrix_sync` from `q_shared + chunk_offset`.
+- The generated patch failed `git apply --check` because its context was stale.
+- No generated patch was applied by the orchestrator, and the lineage did not change.
+
+Manual correction:
+
+- Reapplied the Q-staging idea with current file context.
+- Compile passed on sm86 with no spills, 40 registers, 1 barrier, 22208 bytes shared memory,
+  400 bytes `cmem[0]`, 224 bytes `cmem[4]`, 8 bytes `cmem[2]`, and 28 bytes global memory.
+
+Score result:
+
+- Command: `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`.
+- Correctness passed for both causal modes.
+- Geomean was `0.42035719120740594` TFLOPS, below the accepted best
+  `0.4924015757468769` TFLOPS.
+
+Score details:
+
+- Noncausal: max_abs_error `0.001953125`, median `0.9053760170936584 ms`,
+  `0.5929811502224299` TFLOPS, samples
+  `[0.8616639971733093, 0.9053760170936584, 1.761855959892273]`.
+- Causal: max_abs_error `0.0078125`, median `0.9008319973945618 ms`,
+  `0.2979861470023096` TFLOPS, samples
+  `[0.9008319973945618, 0.8268160223960876, 0.9471359848976135]`.
+
+Decision:
+
+- Reverted the manual Q-staging patch. Like the prior synchronous K/V staging attempts, the static
+  shared-memory copy and synchronization did not pay for itself without overlap.
+- Runtime validation now rejects repeat static `q_shared` MMA Q staging unless the patch adds real
+  overlap or a materially different Q/K dataflow.
+- Runtime knowledge records the measured regression.
+
+Verification:
+
+- `git diff -- candidates/cuda_mma_attention/attention_kernel.cu`: empty after reverting the manual
+  Q-staging patch.
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 88 tests.
+- `uv run --extra dev pytest`: passed, 177 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
