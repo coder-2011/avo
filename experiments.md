@@ -7844,3 +7844,46 @@ Verification:
 - `uv run --extra dev pytest`: passed, 199 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.36: Unused Q-preload skeleton guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the malformed PV preload guard.
+- If the planner uses the step for a compile-only Q preload skeleton that is not consumed by the
+  QK dataflow, record it and reject exact no-op skeletons before future compile steps.
+- Preserve the accepted direct-accumulation lineage.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_pv_preload_guard.json`.
+- The planner proposed a Q double-buffer skeleton that declared `q_frag_next` and loaded the next
+  query tile after the final key tile.
+- NVCC compiled the patch successfully, cleanup reverse-applied it successfully, and no score
+  payload was produced.
+- The patch did not swap or consume `q_frag_next` in the QK MMA path. The decision text explicitly
+  called it a compile-only structural probe that was not expected to improve throughput and must not
+  be scored.
+
+Compile diagnostics:
+
+- The patched source matched the accepted kernel resource counts: no spills, 40 registers,
+  1 barrier, 9920 bytes shared memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes
+  global memory.
+
+Decision:
+
+- Runtime validation now treats `compile-only structural probe`, `does not yet consume`, and
+  `must not be scored` as self-invalid patch descriptions.
+- Runtime validation now rejects unused `q_frag_next` and `probability_frag_next` preload skeletons
+  when the patch adds a `load_matrix_sync(..._frag_next, ...)` but no MMA consumption.
+- Runtime knowledge records the compile-only Q double-buffer skeleton.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 111 tests.
+- `uv run --extra dev pytest`: passed, 201 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
