@@ -3157,3 +3157,51 @@ Tradeoffs and decision:
   but it is still only a correctness foothold.
 - Future MMA work should bring an actual candidate patch that expands the kernel/wrapper path or
   improves tiling, not another no-patch score of the same supported shape.
+
+## 2026-05-08 - Checkpoint 3.27: Reject compile as source inspection
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the MMA seed negative result in runtime knowledge.
+- If the agent uses `avo compile` as a substitute for source-file inspection, reject that pattern
+  at planning time while preserving legitimate compile diagnostics.
+
+Loop result before the fix:
+
+- The agent avoided the rejected MMA baseline but selected:
+  `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu --out-dir build/warp_rows_inspect`.
+- The planning text said the goal was to inspect boundary handling, indexing logic, loop bounds,
+  tile edge conditions, and causal masking for a suspected `seq_len=256` correctness issue.
+- The compile command succeeded, but it produced only an object file and compiler command payload.
+  It did not provide source inspection, correctness data, performance data, or a candidate patch.
+- No lineage commit was created; nested lineage remained at `07f1441`.
+
+Reliability fix:
+
+- Runtime commit `d306aa6 fix: reject compile as source inspection` rejects no-patch `avo compile`
+  decisions unless the planning text is about CUDA build/compilation diagnostics.
+- `avo compile` remains allowed for actual build diagnostics and for build-checking a non-empty
+  `candidate_patch`.
+- The prompt and repo context now state that `avo compile` is not a source-inspection command.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py` passed, 44 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 126 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `d306aa6f0b61362579b1eb4ec875d65a57a83069`.
+
+Tradeoffs and decision:
+
+- This is another planning guardrail, not a kernel optimization. It keeps `avo compile` available
+  for cases where it can actually answer the proposed question.
+- Future loops must now either provide a candidate patch, run a bounded candidate score, or use
+  compile for a real build/compilation diagnostic.
