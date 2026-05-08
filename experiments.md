@@ -3643,3 +3643,50 @@ Tradeoffs and decision:
   preserving compile as a build-check for real candidate patches.
 - The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
   `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.37: Record unsafe cp.async patch shape
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after blocking recorded no-patch compile baselines.
+- If the agent proposes a patch, determine whether it reaches compile/score or reveals another
+  invalid patch pattern.
+
+Loop result:
+
+- The agent proposed a `candidate_patch` for
+  `candidates/cuda_warp_rows_attention/attention_kernel.cu` and selected a patched compile check:
+  `uv run --extra cuda python -m avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu --out-dir build/warp_cpasync_check`.
+- Patch validation rejected the raw diff before compilation:
+  `git apply --check failed` with trailing whitespace and corrupt hunk structure.
+- No command ran, no score was produced, and no lineage commit was created.
+
+CUDA finding:
+
+- The proposed structure was not a viable cp.async direction even aside from patch formatting.
+- It issued 16-byte `cp.async.cg.shared.global` copies at scalar element positions, which risks
+  overlap and misalignment.
+- It removed the previous zero-fill behavior for out-of-tile lanes.
+- It waited immediately with `cp.async.wait_group 0` and `__syncthreads()`, so it did not introduce
+  real double-buffered overlap.
+
+Knowledge update:
+
+- Runtime commit `769c5ca docs: record unsafe cpasync patch shape` records that future cp.async
+  patches need vector-aligned 16-byte groups, preserved zero-fill or guarded shared-memory state
+  for partial tiles, and a real overlapped pipeline rather than a single-stage copy/wait replacement.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `769c5caa68e8cb068afcd98e0d8f2a8f55181767`.
+
+Tradeoffs and decision:
+
+- The compile-repeat guard successfully forced the planner away from the known no-patch ptxas
+  baseline and toward a real patch attempt.
+- The next cp.async attempt should be double-buffered and vector-aligned, or the planner should move
+  to a different patch direction.
+- The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
+  `07f1441`.
