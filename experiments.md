@@ -5550,3 +5550,38 @@ Verification:
 - `uv run --extra dev pytest`: 152 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.85: Dynamic K/V flat-buffer compile proof
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the dynamic shared-memory self-invalid guard.
+- Determine whether a corrected dynamic K/V shared-memory migration can at least compile.
+
+Loop result:
+
+- The agent proposed moving the warp-row K/V staging tiles from static 2D shared arrays into flat
+  `extern __shared__` buffers.
+- The patch kept `score_tiles` static, introduced `kv_stride = kMaxHeadDim + 1`, replaced 2D K/V
+  accesses with flat `key * kv_stride + dim` indexing, and passed dtype-specific dynamic
+  shared-memory byte counts at launch.
+- The patch applied, then `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu
+  --out-dir build/warp_dyn_kv_tiles` succeeded.
+- Cleanup reverse-applied the patch because it was compile-only.
+- No score payload was produced, and the lineage did not change.
+
+Compile result:
+
+- BF16 entry point: 48 registers, 1 barrier, 512 bytes static shared memory, no spills.
+- FP16 entry point: 48 registers, 1 barrier, 512 bytes static shared memory, no spills.
+- FP32 entry point: 56 registers, 1 barrier, 512 bytes static shared memory, no spills.
+
+Decision:
+
+- The dynamic K/V flat-buffer migration is a valid compile proof.
+- Before adding double buffering or `cp.async`, the same migration should be scored on the current
+  seq256/head_dim128 BF16 suite to prove correctness and throughput.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
