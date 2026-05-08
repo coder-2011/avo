@@ -7354,3 +7354,63 @@ Verification:
 - `uv run --extra dev pytest`: passed, 188 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.25: Accepted PV direct accumulation
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the self-invalid PV preload guard.
+- If the agent suggests a structurally useful but stale patch, manually test only the smallest
+  corrected version against the current seq256/head_dim128 BF16 lineage signature.
+- Accept into lineage only if correctness passes and geomean improves over the current best.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_pv_self_invalid_guard.json`.
+- The planner proposed a PV direct-accumulation patch, but its patch context was stale and
+  `git apply --check` rejected it at `candidates/cuda_mma_attention/attention_kernel.cu:106`.
+- No command ran, no score payload was produced, and the candidate source/lineage initially stayed
+  unchanged.
+
+Manual correction:
+
+- Applied the intended minimal dataflow change directly:
+  - Removed the intermediate float `pv_tile[kOutputElements]` shared-memory buffer.
+  - Kept the existing `output_acc *= old_scale[row]` rescale before the PV loop.
+  - Loaded each 16-column `output_acc` chunk into the WMMA accumulator fragment.
+  - Ran PV `mma_sync` into that accumulator and stored it directly back to `output_acc`.
+- This preserves the mathematical operation while removing the later `output_acc += pv_tile` loop.
+
+Compile result:
+
+- Command: `uv run --extra cuda python -m avo compile --source
+  candidates/cuda_mma_attention/attention_kernel.cu --out-dir build/mma_pv_direct_accum_manual`.
+- Compile passed on sm86 with no spills, 40 registers, 1 barrier, 9920 bytes shared memory,
+  400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+
+Score result:
+
+- Command: `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`.
+- First score passed correctness and improved geomean to `0.49959324419420076` TFLOPS.
+- Persisted rerun passed correctness and improved geomean to `0.5772885607891738` TFLOPS.
+- Persisted noncausal: max error `0.001953125`, median `0.6164159774780273` ms,
+  `0.8709555423863704` TFLOPS.
+- Persisted causal: max error `0.0078125`, median `0.7015359997749329` ms,
+  `0.382639602366977` TFLOPS.
+
+Lineage decision:
+
+- Accepted into lineage as commit `845ab85` (`evolve: accept mma pv direct accumulation`).
+- Gate payload: candidate geomean `0.5772885607891738`, previous best
+  `0.4924015757468769`, reason `candidate passed correctness and throughput gate`.
+- Runtime source now matches the accepted direct-accumulation candidate.
+
+Verification:
+
+- `uv run --extra dev pytest`: passed, 188 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
