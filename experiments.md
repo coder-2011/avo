@@ -8811,6 +8811,9 @@ Decision:
 Verification:
 
 - The loop itself compiled and scored the accepted candidate successfully on A6000/sm86.
+- `uv run --extra dev pytest`: passed, 258 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
 - `uv run --extra dev pytest`: passed, 256 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
@@ -8950,3 +8953,56 @@ Verification:
 - `uv run --extra dev pytest`: passed, 258 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.58: Bounded loop accepts seq16384 MMA lane
+
+Success criteria for this checkpoint:
+
+- Continue from the accepted seq8192 lane toward the remaining long target shapes.
+- Preserve the accepted seq16384 source state and update validation constants, tests, README, and
+  knowledge notes.
+- Keep correctness and timing evidence attached to the accepted lane.
+
+Research context:
+
+- Exa search re-confirmed two relevant Ampere references before the run:
+  NVIDIA CUTLASS's Ampere FA2-style example uses 128-thread CTA kernels with 128x128-style tiles
+  and `cp.async`; FlashAttention-2's sm8x head_dim128 heuristic uses smaller N-block choices on
+  sm86, with causal/no-dropout differing from noncausal. This remains search-space evidence rather
+  than a direct instruction for the current minimal shape-graduation step.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_seq8192_lane.json --timeout-s 900 --env-file ../avo/.env.local`
+- Step 1: planner emitted a structured seq16384 cap batch (`kMaxSeqLen=16384`, add `16384` to
+  `SMOKE_SEQUENCES`) and compile-checked it. Compile passed with no spills, 40 registers, 1 barrier,
+  and 9920 bytes shared memory.
+- Step 2: planner reused the pending transform JSON and scored the seq16384 lane. Correctness
+  passed and the suite-aware gate accepted a new benchmark lane.
+
+Accepted seq16384 lane:
+
+- Nested lineage commit: `47ddfcf` (`evolve: accept candidate`).
+- Workload: `seq_len=16384`, `total_tokens=32768`, `num_heads=16`, `head_dim=128`, BF16, both
+  causal modes, `trials=3`, `warmup=1`, `repeats=1`.
+- Noncausal: max error `0.00048828125`, median `436.07733154296875 ms`,
+  `10.08547382076117` TFLOPS, timing CV `0.0008796200588309151`.
+- Causal: max error `0.0078125`, median `433.8869934082031 ms`,
+  `5.068193536474939` TFLOPS, timing CV `0.000364796510224527`.
+- Geomean: `7.14948482274555` TFLOPS.
+- Gate decision: accepted with reason `candidate established benchmark case set`.
+
+Decision:
+
+- Runtime source now carries `kMaxSeqLen=16384` and wrapper
+  `SMOKE_SEQUENCES={16, 32, 64, 128, 256, 1024, 2048, 4096, 8192, 16384}`.
+- Agent-side current MMA base sequences now include 16384, no-edit MMA scores below seq16384 are
+  treated as below the accepted validation lane, and the exact seq16384 no-edit score is recorded.
+- README and knowledge notes now describe seq16384 as the current accepted MMA lane.
+- This establishes another target lane; it still does not satisfy the final objective of beating
+  FlashAttention-2 on the target suite.
+
+Verification:
+
+- The loop itself compiled and scored the accepted candidate successfully on A6000/sm86.
