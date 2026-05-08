@@ -8921,3 +8921,32 @@ Verification:
 - `uv run --extra dev pytest`: passed, 256 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.57: Promote recurring failure classes by tail counts
+
+Success criteria for this checkpoint:
+
+- Reduce the remaining whack-a-mole behavior in attempt memory.
+- Promote recurring CUDA failure classes to hard preflight state even when the failures are
+  interleaved, not only when the last three attempts are the exact same class.
+- Keep the change structural and class-based instead of adding another historical phrase ban.
+
+Decision:
+
+- `update_promoted_preflight_tracks` now scans the unaccepted attempt tail since the last accepted
+  result, counts classified failure classes, and persists every promotable class that reaches the
+  repeat threshold.
+- Supervisor summaries now report recurring classes with counts, for example
+  `cuda_syntax_error(count=3)` and `stale_or_undefined_symbol(count=3)`.
+- The persisted `preflight_tracks.json` state is still loaded before materialized transform/patch
+  preflight, so promoted classes affect the next bounded step rather than remaining prompt-only
+  advice.
+- The legacy `domain_sanity` helper name was removed in favor of the structural preflight path.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_evolve.py::test_summarize_attempt_history_promotes_recurring_failure_class tests/test_evolve.py::test_update_promoted_preflight_tracks_persists_recurring_class tests/test_evolve.py::test_summarize_attempt_history_counts_mixed_recurring_failure_classes tests/test_evolve.py::test_update_promoted_preflight_tracks_persists_mixed_recurring_classes -q`: passed, 4 tests.
+- `uv run --extra dev ruff check avo/evolve.py tests/test_evolve.py avo/agent.py`: passed.
+- `uv run --extra dev pytest`: passed, 258 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
