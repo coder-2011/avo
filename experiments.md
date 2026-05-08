@@ -6424,3 +6424,40 @@ Decision:
   cross-step memory rather than committed lineage.
 - The next K/V staging step should either stage all QK chunks and score, or compile-check a clearly
   different `cp.async`/double-buffered path before scoring.
+
+## 2026-05-08 - Checkpoint 4.04: Guard bad shared-K tile indexing
+
+Success criteria for this checkpoint:
+
+- Run one more bounded Anthropic step with the K-staging compile-only attempt in local memory.
+- Determine whether the proposed full K-staging path is scoreable.
+- If the decision is self-invalid, add a narrow validation guard and durable note instead of
+  preserving or scoring the patch.
+
+Loop result:
+
+- The agent proposed synchronous shared-memory staging for the full 16x128 K tile.
+- The patch cooperatively loaded `k_shared[kTile * kHeadDim]` and switched all eight QK K-fragment
+  WMMA loads to shared memory.
+- The bounded command was compile-only:
+  `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/mma_k_staging_sync`.
+- Compile passed on sm86 with no spills, 40 registers, 1 barrier, 22208 bytes shared memory,
+  400 bytes `cmem[0]`, 224 bytes `cmem[4]`, 8 bytes `cmem[2]`, and 28 bytes global memory.
+- Cleanup reverse-applied the transient patch successfully.
+
+Decision:
+
+- Do not score or preserve the patch. Its own risk text correctly identified the bug:
+  `wmma::load_matrix_sync(k_frag, k_shared + key_start * kHeadDim + chunk_offset, kHeadDim)` uses a
+  global key offset against a tile-local shared buffer.
+- The correct base for the staged tile is `k_shared + chunk_offset` with leading dimension
+  `kHeadDim`.
+- Runtime validation now rejects candidate patches that stage an MMA K tile in shared memory and
+  then load it with `k_shared + key_start * kHeadDim`.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
