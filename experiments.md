@@ -4423,3 +4423,41 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `f8f41f9c939c406f87b57a4aca60d0aa1e1b49a3`.
+
+## 2026-05-08 - Checkpoint 3.54: Verify CUDA pipeline primitive header smoke
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after adding the WMMA fragment layout guard.
+- Prefer a compile-checkable, source-changing diagnostic over another no-edit baseline.
+
+Loop result:
+
+- The agent selected a compile-only cp.async header smoke for the warp-row kernel.
+- The patch added `#include <cuda_pipeline_primitives.h>` and unused wrappers around
+  `__pipeline_memcpy_async`, `__pipeline_commit`, and `__pipeline_wait_prior`.
+- The patch applied cleanly and `avo compile --source
+  candidates/cuda_warp_rows_attention/attention_kernel.cu --out-dir build/warp_cpasync_header_check`
+  succeeded.
+- Cleanup reverted the patch afterward because compile-only attempts do not enter lineage.
+- The nested lineage head remained `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Compile diagnostics:
+
+- NVCC warned only that the commit/wait helper functions were unused.
+- BF16 entry point: 48 registers, 1 barrier, 16896 bytes shared memory, no spills.
+- FP16 entry point: 48 registers, 1 barrier, 16896 bytes shared memory, no spills.
+- FP32 entry point: 56 registers, 1 barrier, 33280 bytes shared memory, no spills.
+
+Decision:
+
+- This proves the CUDA 13 header/API availability for local `__pipeline_*` primitives on sm86.
+- It does not prove any performance improvement.
+- The next cp.async attempt must still add real double-buffered overlap and keep 16-byte BF16
+  groups aligned and disjoint from scalar tail writes.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `4e683c0e4616c30caca3c4091ef364fe055231a7`.
