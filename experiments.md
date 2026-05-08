@@ -3283,3 +3283,34 @@ Tradeoffs and decision:
 - This keeps compile diagnostics useful without broadening the command allowlist.
 - The ptxas numbers are not a candidate improvement by themselves, but they give the next kernel
   patch a concrete register/shared-memory baseline.
+
+## 2026-05-08 - Checkpoint 3.30: Tiled seed ptxas baseline
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording warp-row ptxas resources.
+- If the agent pivots to a new local seed, capture any useful compile diagnostics in runtime
+  knowledge.
+
+Loop result:
+
+- The agent pivoted from warp-row/MMA to the tiled seed and compiled:
+  `candidates/cuda_tiled_attention/attention_kernel.cu`.
+- The compile succeeded and emitted ptxas resource data through the new diagnostic path.
+- BF16 entry point: 40 registers, 1 barrier, no spills.
+- Half entry point: 40 registers, 1 barrier, no spills.
+- FP32 entry point: 40 registers, 1 barrier, no spills.
+- Double entry point: 48 registers, 1 barrier, no spills.
+- ptxas did not report static shared-memory allocation for these entry points.
+- No score was run and no lineage commit was created; nested lineage remained at `07f1441`.
+
+Runtime update:
+
+- Runtime commit `30883e5 docs: record tiled ptxas baseline` stores the tiled seed resource
+  baseline in `knowledge/ampere.md`.
+
+Tradeoffs and decision:
+
+- The tiled compile result is useful context but does not prove correctness or performance.
+- Future tiled work should run a bounded candidate score or provide a real candidate patch rather
+  than repeating a no-patch compile diagnostic.
