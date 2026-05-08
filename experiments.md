@@ -8170,3 +8170,60 @@ Verification:
 - `uv run --extra dev pytest`: passed, 211 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.43: Transform and failure-class redesign
+
+Success criteria for this checkpoint:
+
+- Stop adding one-off CUDA guardrails for every malformed attempt.
+- Add a structured edit channel so the planner can request tiny transformations instead of raw CUDA
+  diffs.
+- Add generalized attempt failure classes so recurring failures can be promoted to hard preflight
+  tracks by class, rather than by accumulating phrase bans.
+
+Source refresh:
+
+- Exa refreshed agentic CUDA-kernel tuning context. The relevant design signal was to constrain
+  edits to localized, incremental transformations and let the correctness/performance harness decide
+  whether the change persists, instead of letting the model freely regenerate brittle patches.
+  Sources: https://www.arxiv.org/pdf/2603.21331 and
+  https://arxiv.org/html/2601.12698v1
+
+Design change:
+
+- `VariationDecision` now accepts an optional `candidate_transform` object, mutually exclusive with
+  raw `candidate_patch`.
+- Supported transform ops are `replace_once`, `insert_before_once`, `insert_after_once`, and
+  `set_constexpr_int`.
+- `run_decision_command` materializes a transform into a normal candidate patch, applies the same
+  candidate-only patch safety checks, records the generated patch in the attempt, and still uses the
+  existing cleanup path for rejected candidates.
+- Raw unified diffs remain as a legacy fallback, but the prompt and repo context now steer CUDA
+  edits toward structured transforms.
+
+Failure classification:
+
+- The self-invalid phrase list was replaced with planning-risk classes:
+  no-effect/skeleton, incomplete or malformed edit, predicted compile failure, and predicted
+  correctness failure.
+- Attempt summaries now include a generalized failure class such as raw-diff preflight, structured
+  transform preflight, patch-safety preflight, unsupported WMMA shape, CUDA syntax error, stale or
+  undefined symbol, correctness failure, throughput regression, or compile-only diagnostic.
+- Supervisor history now detects repeated unaccepted failure classes and asks the planner to promote
+  that class to a hard preflight track or switch transform families.
+
+Decision:
+
+- This is a reliability redesign, not a kernel-performance checkpoint. No new score was accepted and
+  the lineage head stays at the direct-accumulation MMA kernel.
+- The next evolution step should use `candidate_transform` when the edit is expressible as a small
+  replace/insert/constexpr change. Recurring CUDA mistakes should become generalized preflight
+  classes, not single-attempt ban phrases.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 124 tests.
+- `uv run --extra dev pytest tests/test_evolve.py -q`: passed, 41 tests.
+- `uv run --extra dev pytest`: passed, 218 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
