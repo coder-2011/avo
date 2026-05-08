@@ -2955,3 +2955,80 @@ Tradeoffs and decision:
   loop and keeps future shape increases tied to explicit candidate patches.
 - The current lineage best remains `0.007001040892301204` geomean TFLOPS on `seq_len=128`,
   `head_dim=128`.
+
+## 2026-05-08 - Checkpoint 3.23: Structured planning failure and multi-head smoke accept
+
+Success criteria for this checkpoint:
+
+- Verify the seed-cap validator against the live agent loop.
+- If invalid planning still escapes the retry loop as a traceback, convert it into structured loop
+  output.
+- Continue only one bounded step after that fix and record whether the result is a code patch or
+  another shape-only score.
+
+Live validator result:
+
+- Re-running the loop after `f6eaf1c` correctly rejected the repeated no-patch `seq_len=256`
+  warp-row score during decision validation.
+- The model repeated the invalid shape-only plan through all three planning attempts, so the CLI
+  exited with a raw `ValueError` traceback instead of writing a structured `latest-loop.json`.
+- Runtime commit `ed241e6 fix: record invalid planning attempts` now catches planning validation
+  `ValueError`s inside evolve steps and converts them into a synthetic failed attempt with
+  `stderr_tail` explaining the planning validation failure. The loop still exits nonzero when no
+  candidate is accepted, but the failure is now recorded in the usual loop/attempt JSON shape.
+
+Verification for the planning-failure fix:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/cli.py avo/evolve.py tests/test_cli.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_cli.py tests/test_evolve.py` passed, 53 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 119 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `ed241e68bc79fc7aa28dfea23a3e7a66f2ca5170`.
+
+Accepted command after the fix:
+
+`uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge
+knowledge/ampere.md --attempts-dir benchmarks/attempts --loop-json benchmarks/latest-loop.json
+--max-steps 1 --timeout-s 300 --env-file ../avo/.env.local`
+
+The agent selected:
+
+`avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens
+128 --total-tokens 512 --num-heads 4 --head-dim 128 --dtype bf16 --causal both --repeats 1
+--warmup 1 --timeout-s 300`
+
+Result:
+
+- Gate decision: accepted.
+- Acceptance reason: candidate passed correctness and throughput gate.
+- Previous best geomean: `0.007001040892301204` TFLOPS.
+- Candidate geomean: `0.10830947571120902` TFLOPS.
+- Noncausal case: batch 4, heads 4, seq_len 128, BF16, head_dim 128, max_abs_error
+  `0.00390625`, `1.0499839782714844` ms, `0.12782835812500043` TFLOPS.
+- Causal case: batch 4, heads 4, seq_len 128, BF16, head_dim 128, max_abs_error
+  `0.015625`, `0.7312639951705933` ms, `0.09177104909198282` TFLOPS.
+- Benchmark environment: Torch `2.11.0+cu130`, CUDA `13.0`, Python `3.12.13`,
+  NVIDIA RTX A6000, `sm_86`.
+
+Lineage artifacts:
+
+- Nested lineage commit: `07f1441 evolve: accept candidate`.
+- Only `scores/latest.json` changed in the nested lineage repo.
+- The accepted source remains the same warp-row seed snapshot; no outer runtime repo files changed.
+
+Tradeoffs and decision:
+
+- This validates multi-head/batch indexing for the warp-row seed at the current smoke caps, which is
+  useful before larger wrapper/kernel edits.
+- It is still not a kernel optimization. The large TFLOPS jump mainly comes from changing the
+  workload from single-head, 128 total tokens to four heads and 512 total tokens, so future steps
+  should not treat this as evidence of a faster kernel.
+- The current lineage best is now `0.10830947571120902` geomean TFLOPS on the multi-head
+  `seq_len=128`, `head_dim=128`, `total_tokens=512`, `num_heads=4` smoke.
