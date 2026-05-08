@@ -3792,3 +3792,47 @@ Tradeoffs and decision:
   path scales to `seq_len=256`.
 - The current lineage best is now `0.4012802607933843` geomean TFLOPS on nested lineage commit
   `cfe5b45`.
+
+## 2026-05-08 - Checkpoint 3.40: Gate on benchmark case signature
+
+Success criteria for this checkpoint:
+
+- Audit the accepted seq256 result for gate quality.
+- Prevent future candidates from winning purely by changing the scored workload.
+
+Issue found:
+
+- The seq256 warp-row result is valid and useful, but it also exposed a gate weakness: TFLOPS
+  improved partly because the workload changed from seq128/512 tokens to seq256/1024 tokens.
+- That kind of shape-only change should establish a new baseline, but future throughput comparisons
+  must be against the same benchmark case signature.
+
+Reliability fix:
+
+- Runtime commit `622582e fix: gate on benchmark case signature` makes `commit_score` load the
+  current `scores/latest.json` payload and compare sorted scored-case signatures before accepting
+  a candidate.
+- A candidate must now pass correctness, have finite positive geomean, and match the current best's
+  benchmark cases before geomean comparison can accept it.
+- Runtime commit `2f7fc68 docs: clarify fixed-case gate` records the rule in `knowledge/ampere.md`.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/lineage.py tests/test_lineage.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_lineage.py` passed, 10 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 135 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `2f7fc68ff08aa1a44194bc25937cd8173befa7b3`.
+
+Tradeoffs and decision:
+
+- The current accepted seq256 lineage stays as the active comparison suite. Future optimization
+  candidates need to score that same case set unless we deliberately reseed the benchmark suite.
+- This makes the throughput gate stricter and prevents shape-only TFLOPS inflation.
