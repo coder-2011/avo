@@ -8525,3 +8525,51 @@ Verification:
 - `uv run --extra dev pytest`: passed, 240 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.50: Suite-aware lineage lanes
+
+Success criteria for this checkpoint:
+
+- Unblock migration from tiny smoke suites to larger validation workloads without comparing
+  unrelated benchmark signatures.
+- Preserve apples-to-apples throughput gating within each benchmark case signature.
+- Record the previously scored seq512 MMA shape-graduation result as a lineage lane with source and
+  patch artifacts.
+
+Problem:
+
+- The seq512 structured batch score from checkpoint 4.49 passed correctness and reached
+  `2.334850177270671` geomean TFLOPS, but the lineage gate rejected it because the latest accepted
+  score was the smaller seq256/head_dim128 smoke suite.
+- That rejection preserved apples-to-apples comparison, but it also trapped the search on the old
+  smoke suite and prevented larger validation workloads from becoming durable lineage evidence.
+
+Decision:
+
+- Runtime lineage gating now looks up the best prior payload with the same benchmark case signature.
+- A candidate that matches an existing signature must match or improve that signature's best
+  geomean, preserving apples-to-apples gating.
+- A candidate with a new valid signature can establish a new benchmark case lane when it passes
+  correctness and has a finite positive geomean.
+- Accepted scores are written to `scores/by_signature/<hash>.json` as well as `scores/latest.json`.
+- The runtime knowledge base and README now describe the suite-aware gate.
+
+Lineage result:
+
+- Replayed the already-recorded seq512 score through the new gate by applying the recorded batch
+  patch, snapshotting the patched wrapper plus companion CUDA source directory, committing the score
+  to the nested lineage repo, and reverting the runtime worktree patch.
+- Nested lineage commit: `bc05dd85ccc8872308c786ba57664cfdffdc4640`
+  (`evolve: accept mma seq512 shape lane`).
+- Gate decision: accepted, best geomean `0.0`, candidate geomean `2.334850177270671`, reason
+  `candidate established benchmark case set`.
+- The nested lineage source snapshot includes `candidates/cuda_mma_attention_seed.py`,
+  `candidates/cuda_mma_attention/attention.cpp`, and
+  `candidates/cuda_mma_attention/attention_kernel.cu`.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_lineage.py tests/test_evolve.py -q`: passed, 61 tests.
+- `uv run --extra dev pytest`: passed, 241 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
