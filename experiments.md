@@ -1606,3 +1606,86 @@ Tradeoffs and decision:
 - This is still not a production attention kernel. It proves the local repo can execute both
   attention MMAs on sm86 tensor cores under the existing scorer. The next meaningful direction is
   tiling beyond 16 keys or introducing online softmax state around multiple QK/PV tiles.
+
+## 2026-05-08 - Checkpoint 3.4: two-tile online softmax in the MMA seed
+
+Success criteria for this checkpoint:
+
+- Extend the tiny MMA seed beyond a single 16-key tile without changing the production benchmark
+  suite or claiming performance.
+- Support both sequence length 16 and 32 with head dimension 16 and BF16.
+- For sequence length 32, process two 16-key tiles with FP32 online softmax state:
+  running row maximum, running denominator, and unnormalized output accumulator.
+- Keep QK and PV on tensor cores for every tile.
+- Verify causal and non-causal correctness against PyTorch SDPA for both 32-token and 16-token
+  smokes.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/candidates/cuda_mma_attention/attention_kernel.cu`.
+- The kernel now launches one CTA per `(batch, head, 16-query tile)`.
+- Each CTA iterates over 16-key K/V tiles:
+  - compute a 16x16 QK score tile with WMMA;
+  - update per-row FP32 online softmax state;
+  - store unnormalized softmax weights as BF16 in shared memory;
+  - rescale the previous FP32 output accumulator;
+  - compute the current PV tile with WMMA;
+  - accumulate and normalize only after all K/V tiles finish.
+- Updated `/home/ubuntu/avo-ampere/candidates/cuda_mma_attention_seed.py` to allow sequence
+  lengths 16 and 32.
+- Updated `/home/ubuntu/avo-ampere/avo/agent.py` so the preferred local MMA smoke command uses
+  `--seq-lens 32 --total-tokens 32`, exercising the online path.
+- Updated `/home/ubuntu/avo-ampere/tests/test_agent.py`, `README.md`, and `knowledge/ampere.md`.
+
+Online research notes:
+
+- Exa search on FlashAttention online softmax resurfaced the core recurrence:
+  update the row max, rescale the old denominator/output accumulator, add the current tile's
+  exponentials and PV contribution, and divide at the end. This is the recurrence implemented in
+  the two-tile smoke.
+  Sources:
+  - https://arxiv.org/pdf/2205.14135
+  - https://peterchng.com/blog/2024/06/26/the-basic-idea-behind-flashattention/
+  - https://mbrenndoerfer.com/writing/flashattention-algorithm-memory-efficient-gpu-tiling
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py candidates/cuda_mma_attention_seed.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py tests/test_candidate_backend.py`
+  passed, 25 tests.
+- Clean two-tile CUDA extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_mma_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 32 --total-tokens 32 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal BF16 32-token smoke: max abs error `0.001953125`,
+    `0.7738879919052124` ms, `8.468408953944203e-05` TFLOPS.
+  - Causal BF16 32-token smoke: max abs error `0.00390625`,
+    `0.6883839964866638` ms, `4.7601339030598484e-05` TFLOPS.
+  - Geomean: `6.34907556787957e-05` TFLOPS.
+- SASS check:
+  `cuobjdump --dump-sass /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_mma_attention_seed/avo_cuda_mma_attention_seed.so | rg -n "HMMA|MMA|BMMA|wmma|WGMMA"`
+  found `HMMA.16816.F32.BF16` instructions.
+- Cached 16-token regression smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16 16-token smoke: max abs error `0.0`.
+  - Causal BF16 16-token smoke: max abs error `0.0`.
+  - Geomean: `1.3579363584840928e-05` TFLOPS.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 62 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- This is still a tiny correctness seed. It only reaches 32 tokens, still stores softmax weights as
+  BF16 between softmax and PV, and has no cp.async pipeline or production shared-memory layout.
+- The important progress is algorithmic: the local tensor-core candidate now crosses a tile
+  boundary using online softmax state while remaining inside the existing isolated scorer and
+  correctness gate.
