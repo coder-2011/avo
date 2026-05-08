@@ -3205,3 +3205,28 @@ Tradeoffs and decision:
   for cases where it can actually answer the proposed question.
 - Future loops must now either provide a candidate patch, run a bounded candidate score, or use
   compile for a real build/compilation diagnostic.
+
+## 2026-05-08 - Checkpoint 3.28: Guarded planning failure is structured
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the compile-as-inspection guard.
+- Confirm that invalid edit-without-patch plans are captured as structured attempts rather than
+  leaking as raw tracebacks or workspace changes.
+
+Loop result:
+
+- The agent produced invalid decisions for all three planning attempts: its `candidate_edit`
+  described a code change but `candidate_patch` was empty.
+- The loop recorded a synthetic failed `agent-plan` attempt with:
+  `candidate_patch must be non-empty when candidate_edit describes a code change`.
+- No bounded command was executed, no candidate patch was applied, and no lineage commit was created.
+- Runtime repo, docs repo, and nested lineage were clean after the run; lineage remained at
+  `07f1441`.
+
+Tradeoffs and decision:
+
+- This is the desired failure mode after the stricter guardrails: invalid plans consume a bounded
+  attempt and become history for the next prompt instead of mutating the workspace.
+- The next useful step is to see whether the attempt history now pushes the agent into either a
+  real candidate patch or a bounded score that can affect lineage.
