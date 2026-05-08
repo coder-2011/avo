@@ -788,3 +788,116 @@ Tradeoffs and uncertainty:
 - The implementation intentionally avoids tensor cores and async copy until the online softmax
   state is stable under small correctness smokes. The next kernel step should introduce either
   multi-row CTA tiling or tensor-core QK/PV fragments, but not both at once.
+
+## 2026-05-08 - Checkpoint 2.3: warp-row multi-row attention seed
+
+Success criteria for this checkpoint:
+
+- Add a separate CUDA candidate that introduces multi-row CTA structure without mutating the
+  working one-CTA-per-row tiled seed.
+- Use one warp per query row and multiple rows per CTA, while preserving the existing online
+  softmax math and tiny-shape guardrails.
+- Use warp-level reductions for row max and row sum, not block-wide shared-memory reductions.
+- Keep the candidate intentionally scalar: no `mma.sync`, no `cp.async`, no shared K/V staging.
+- Verify BF16 and FP32 correctness against PyTorch SDPA.
+- Make the Anthropic planner prefer this new seed for the next bounded score command.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/candidates/cuda_warp_rows_attention_seed.py`.
+- Added CUDA extension sources under
+  `/home/ubuntu/avo-ampere/candidates/cuda_warp_rows_attention/`:
+  - `attention.cpp`;
+  - `attention_kernel.cu`.
+- The CUDA kernel shape is:
+  - 4 query rows per CTA;
+  - 1 warp per query row;
+  - 32-key tiles;
+  - warp-shuffle max and sum reductions;
+  - per-lane output accumulators for up to head dimension 128;
+  - FP32 score, row max, row sum, and output accumulation;
+  - online output rescaling when a later K tile increases the running row max;
+  - causal masking by limiting each row's K loop to `query + 1`.
+- Updated `/home/ubuntu/avo-ampere/avo/agent.py` so candidate preference is now:
+  - `cuda_warp_rows_attention_seed.py`;
+  - `cuda_tiled_attention_seed.py`;
+  - `cuda_naive_attention_seed.py`;
+  - `cuda_identity_seed.py`;
+  - `torch_sdpa_seed.py`.
+- Added agent tests for warp-row preference and fallback to the tiled seed.
+- Updated README and `knowledge/ampere.md` to describe the warp-row seed as the current
+  local candidate.
+
+Online research notes:
+
+- Exa research on CUDA softmax examples showed warp-level max/sum reductions using shuffle
+  intrinsics before shared-memory inter-warp reduction. This checkpoint uses only the warp
+  portion because each warp owns one row.
+  Source: https://github.com/karpathy/llm.c/blob/master/dev/cuda/attention_forward.cu
+- Exa research on online-softmax examples showed a fused max/denominator reduction pattern
+  using `__shfl_xor_sync`. I kept the implementation simpler by separately reducing tile max
+  and tile sum, then applying the same online rescaling formula used in prior checkpoints.
+  Source: https://github.com/DefTruth/CUDA-Learn-Notes/blob/main/kernels/softmax/softmax.cu
+- Exa research on FlashAttention-oriented kernel writeups reinforced that in-register or
+  shuffle-based softmax state is a real optimization direction before, or alongside, tensor-core
+  fragment work. This checkpoint uses that direction without copying the PTX/MMA design.
+  Source: https://github.com/Tugbars/Flash-Attention-PTX-CUDA
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest tests/test_agent.py tests/test_candidate_backend.py`:
+  24 passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 52 passed.
+- Clean BF16 warp-row extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_warp_rows_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal BF16: max abs error `0.00390625`, 0.911 ms.
+  - Causal BF16: max abs error `0.015625`, 0.877 ms.
+  - Geomean: `1.2962724058836346e-05` TFLOPS.
+- FP32 warp-row smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype fp32 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal FP32: max abs error `4.76837158203125e-07`, 0.670 ms.
+  - Causal FP32: max abs error `4.76837158203125e-07`, 0.856 ms.
+  - Geomean: `1.5301870900236325e-05` TFLOPS.
+- BF16 64x64 warp-row smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 64 --total-tokens 64 --num-heads 1 --head-dim 64 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.702 ms.
+  - Causal BF16: max abs error `0.0078125`, 0.622 ms.
+  - Geomean: `0.0011223817750085961` TFLOPS.
+- Same 64x64 BF16 shape on the previous tiled seed:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_tiled_attention_seed.py --seq-lens 64 --total-tokens 64 --num-heads 1 --head-dim 64 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: 1.026 ms.
+  - Causal BF16: 0.923 ms.
+  - Geomean: `0.000761717128185525` TFLOPS.
+  - The warp-row seed is about 1.47x higher geomean on this noisy one-repeat tiny smoke.
+- BF16 128x128 warp-row smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 128 --total-tokens 128 --num-heads 1 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.965 ms.
+  - Causal BF16: max abs error `0.0078125`, 0.852 ms.
+  - Geomean: `0.006542664771912421` TFLOPS.
+- Live Anthropic planner smoke:
+  `uv run --extra agent python -m avo agent-plan --lineage /tmp/avo-agent-context-warp-rows-lineage --knowledge knowledge/ampere.md --cwd /home/ubuntu/avo-ampere --env-file /home/ubuntu/avo/.env.local`
+  passed.
+  - Returned `files_to_inspect`:
+    - `candidates/cuda_warp_rows_attention_seed.py`;
+    - `candidates/cuda_warp_rows_attention/attention_kernel.cu`;
+    - `candidates/cuda_warp_rows_attention/attention.cpp`.
+  - Returned bounded `next_command`:
+    `avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+
+Tradeoffs and uncertainty:
+
+- This is the first multi-row CTA seed, not a production attention kernel. It still uses scalar
+  dot products and scalar PV accumulation, so absolute TFLOPS remain tiny.
+- The 64x64 comparison suggests the row-per-warp layout is a useful incremental direction, but
+  the benchmark uses one repeat on tiny shapes. Treat the ratio as a development signal, not a
+  stable performance claim.
+- The next kernel step should probably introduce tensor-core fragments for QK or PV on a tiny
+  fixed head dimension, while preserving the warp-row seed as a correctness fallback.
