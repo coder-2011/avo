@@ -1750,3 +1750,80 @@ Tradeoffs and decision:
   for the next loop step.
 - This checkpoint does not yet let the Anthropic agent emit or apply edits. It adds the bounded
   executor that a later schema-validated patch decision can call before scoring and lineage gating.
+
+## 2026-05-08 - Checkpoint 3.6: schema-carried candidate patches
+
+Success criteria for this checkpoint:
+
+- Let the Anthropic variation decision carry one bounded candidate edit without widening the
+  `next_command` shell/CLI allowlist.
+- Keep `next_command` limited to `avo env`, `avo compile`, and `avo score`.
+- Apply a non-empty `candidate_patch` through the existing `candidates/`-only patch validator
+  before running the bounded command.
+- Record patch success or rejection in attempt JSON and attempt-history summaries.
+- Recover safely from malformed non-diff patch commentary in the agent response.
+- Verify the real Anthropic planning path with `ANTHROPIC_API_KEY` loaded from `.env.local`.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/agent.py`:
+  - added required schema field `candidate_patch`;
+  - raised the Anthropic response token cap from 1200 to 4000 for small diffs;
+  - normalized non-diff patch commentary to an empty patch;
+  - kept markdown-fenced diff content invalid;
+  - added retry feedback for invalid structured decisions.
+- Updated `/home/ubuntu/avo-ampere/avo/evolve.py`:
+  - `run_decision_command(...)` applies `candidate_patch` before the command;
+  - patch failures stop command execution;
+  - `VariationAttempt` records `patch_result`;
+  - attempt history now reports patch status.
+- Updated `/home/ubuntu/avo-ampere/tests/test_agent.py` and
+  `/home/ubuntu/avo-ampere/tests/test_evolve.py`.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md`.
+
+Online research notes:
+
+- Exa search found Anthropic's strict tool-use docs: strict tool definitions schema-constrain tool
+  inputs and are recommended for agentic workflows. This supports keeping the decision as a strict
+  tool input rather than free-form text.
+  Source: https://console.anthropic.com/docs/en/agents-and-tools/tool-use/strict-tool-use
+- Exa search found Anthropic structured-output docs noting schema-constrained output paths and the
+  need for `additionalProperties: false`. It also surfaced the all-properties-required guidance for
+  structured JSON outputs, so `candidate_patch` is required in the schema but defaults to empty when
+  older saved decision JSON is loaded locally.
+  Source: https://docs.claude.com/en/docs/build-with-claude/structured-outputs
+- Exa search found Anthropic tool-use troubleshooting guidance: strict mode handles schema shape,
+  but tool descriptions and examples still matter for ambiguous parameters. The live smoke confirmed
+  the distinction: the first schema-valid response put non-diff commentary into `candidate_patch`.
+  Source: https://console.anthropic.com/docs/en/agents-and-tools/tool-use/troubleshooting-tool-use
+
+Verification:
+
+- First live Anthropic smoke:
+  `rm -rf /tmp/avo-agent-patch-lineage && uv run --extra agent --extra cuda python -m avo agent-plan --lineage /tmp/avo-agent-patch-lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local`
+  initially failed after three retries because `candidate_patch` was a string but not a diff. This
+  exposed that strict schema alone was not enough semantic validation.
+- After normalizing non-diff patch commentary to empty, the same live Anthropic smoke passed. The
+  returned decision had `candidate_patch: ""` and the expected bounded score command for
+  `candidates/cuda_mma_attention_seed.py` on the 32-token BF16 smoke.
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py avo/evolve.py tests/test_agent.py tests/test_evolve.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py tests/test_evolve.py tests/test_cli.py`
+  passed, 56 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 81 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- Non-diff `candidate_patch` text is treated as no patch instead of killing the planning step. This
+  is conservative: it cannot apply an unintended edit, and the bounded score command can still run.
+- A malformed diff-like patch is still rejected by the patch executor before command execution.
+- This is still a one-step loop, not a full multi-session autonomous search. The next missing layer
+  is repeated edit/score/diagnose control flow with cleanup policy for rejected working-tree edits.
