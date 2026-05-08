@@ -7976,3 +7976,46 @@ Verification:
 - `uv run --extra dev pytest`: passed, 204 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.39: Must-not-score retry feedback
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the recorded warp-row diagnostic guard.
+- If planning fails because the agent repeatedly returns a self-invalid patch whose own text says it
+  must not be scored, improve retry feedback rather than touching candidate kernels.
+- Preserve source and lineage.
+
+Source refresh:
+
+- Exa refreshed SM8x FlashAttention launch choices before this run. The useful note was that
+  upstream FA2 code comments identify 128x32 with 4 warps as an A6000-friendly head-dim-128 path,
+  while newer SM8x tile-size code explores 128x128/8-warp variants for SM86. Sources:
+  https://github.com/Dao-AILab/flash-attention/blob/main/csrc/flash_attn/src/flash_fwd_launch_template.h
+  and https://github.com/Dao-AILab/flash-attention/blob/main/hopper/tile_size.h
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_warp_row_diagnostic_guard.json`.
+- The planner failed validation after three attempts.
+- Final validation error: `candidate_patch is described as known invalid by the decision itself;
+  found phrase 'must not be scored'`.
+- No command ran beyond the internal `agent-plan` failure record, no patch applied, no score
+  payload was produced, and lineage stayed unchanged.
+
+Decision:
+
+- Runtime retry feedback now has a targeted branch for `must not be scored`.
+- The feedback says not to retry another compile-only skeleton with that language. It requires
+  either an edit-mode raw diff complete enough to score after a successful compile, or a different
+  no-edit diagnostic.
+- Runtime knowledge records the planning failure and feedback adjustment.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 115 tests.
+- `uv run --extra dev pytest`: passed, 205 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
