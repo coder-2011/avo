@@ -7794,3 +7794,53 @@ Verification:
 - `uv run --extra dev pytest`: passed, 197 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.35: Malformed PV preload guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the compile-only WMMA skeleton guard.
+- If the planner proposes a structurally malformed PV preload patch and the decision text already
+  identifies the compile failure, reject that class before future patch application.
+- Preserve the accepted direct-accumulation source and lineage.
+
+Source refresh:
+
+- Exa refreshed Ampere FlashAttention references before this run. The useful reinforcement from
+  NVIDIA CUTLASS and Dao-AILab sources was 128-thread SM80-style tiles, 16-byte `cp.async` copies,
+  online softmax, O rescaling before PV, and register-resident O accumulation. Source:
+  https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_wmma_skeleton_guard.json`.
+- The planner proposed a PV probability-fragment preload using `probability_frag_next`.
+- The patch applied, but compile failed and cleanup reverse-applied it successfully.
+- No score payload was produced, no gate decision ran, and lineage stayed unchanged.
+
+Compile failure:
+
+- NVCC warned that a standalone `probability_frag;` statement had no effect.
+- NVCC then failed because a stale `wmma::store_matrix_sync(&output_acc[chunk_offset], output_frag,
+  ...)` line remained outside the PV chunk scope, leaving `chunk_offset` and `output_frag`
+  undefined and causing follow-on parse errors.
+- The decision risk text had already said the duplicate `probability_frag;` line and duplicate store
+  line were a diff structure error that would cause NVCC compile failure.
+
+Decision:
+
+- Runtime validation now treats `will cause NVCC compile failure`, `diff structure error`, and
+  `duplicate store line` as self-invalid patch descriptions.
+- Runtime validation also rejects PV preload patches that add `probability_frag_next`,
+  `probability_frag = probability_frag_next;`, and a standalone `probability_frag;` statement in
+  added lines.
+- Runtime knowledge records the malformed PV preload compile failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 109 tests.
+- `uv run --extra dev pytest`: passed, 199 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
