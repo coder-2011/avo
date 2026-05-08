@@ -3127,3 +3127,33 @@ Tradeoffs and decision:
   command when it wants file context.
 - The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
   `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.26: MMA seed baseline remains noncompetitive
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the `avo env` source-inspection guard.
+- Confirm whether the agent now chooses a real score/compile step or patch under the latest
+  planning rules.
+
+Loop result:
+
+- The agent selected a valid no-patch score command for `candidates/cuda_mma_attention_seed.py`:
+  `seq_len=32`, `head_dim=16`, `total_tokens=32`, `num_heads=1`, BF16, both causal modes.
+- The command passed correctness for both cases.
+- Noncausal case: max_abs_error `0.001953125`, `0.7282559871673584` ms,
+  `8.999033465541473e-05` TFLOPS.
+- Causal case: max_abs_error `0.00390625`, `0.6895359754562378` ms,
+  `4.7521813460593916e-05` TFLOPS.
+- Candidate geomean: `6.539498372773744e-05` TFLOPS.
+- Gate decision: rejected, because the current lineage best is `0.10830947571120902` geomean
+  TFLOPS from nested lineage commit `07f1441`.
+- No candidate patch was applied, no lineage commit was created, and nested lineage remained at
+  `07f1441`.
+
+Tradeoffs and decision:
+
+- This is useful as a negative result: the MMA seed is correct at its maximum unpatched smoke shape,
+  but it is still only a correctness foothold.
+- Future MMA work should bring an actual candidate patch that expands the kernel/wrapper path or
+  improves tiling, not another no-patch score of the same supported shape.
