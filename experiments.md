@@ -8310,3 +8310,38 @@ Verification:
 - `uv run --extra dev pytest`: passed, 222 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.46: Transform-aware score-repeat feedback
+
+Success criteria for this checkpoint:
+
+- Run a live loop after transform-channel retry feedback.
+- If old validation messages still steer the planner toward raw diffs only, update them to advertise
+  the structured transform channel consistently.
+- Verify with focused tests and full checks.
+
+Live loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_transform_channel_feedback.json`.
+- Planning failed after three retries before any candidate command executed.
+- The final validation error was a recorded unpatched MMA seed score repeat. This means the edit
+  channel confusion was resolved, but the remaining score-repeat guidance still said only
+  `candidate_patch`.
+- No score payload was produced and lineage stayed unchanged.
+
+Decision:
+
+- Recorded seed-score repeat errors now say `candidate_transform/candidate_patch` instead of only
+  `candidate_patch`.
+- Retry feedback for unpatched MMA and warp-row seed scores now recommends `candidate_transform`
+  or a legacy raw patch.
+- No CUDA-domain ban was added.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 128 tests.
+- `uv run --extra dev pytest`: passed, 222 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
