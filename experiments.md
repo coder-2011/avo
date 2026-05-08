@@ -4306,3 +4306,49 @@ Tradeoffs and decision:
 - The orchestrator behaved correctly by rejecting the malformed patch without touching the tree.
 - The next MMA attempt should be smaller than the rejected patch, preferably compile-checking only
   the first structural slice before changing the score shape.
+
+## 2026-05-08 - Checkpoint 3.51: Require compile-first MMA shape extensions
+
+Success criteria for this checkpoint:
+
+- Run another bounded loop after the diff-hygiene prompt update.
+- Stop repeated malformed MMA shape-extension attempts from jumping straight to score.
+
+Loop result:
+
+- The agent attempted another source-changing head_dim32 MMA patch.
+- The patch again bundled wrapper changes, QK changes, PV changes, and a score command in one step.
+- `git apply --check` rejected it before execution with `error: corrupt patch at line 120`.
+- No source was modified, no score ran, and the nested lineage head remained
+  `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Additional finding:
+
+- Beyond the malformed hunk, the proposed patch introduced undefined `head_dim` identifiers inside
+  the CUDA kernel and still used unsupported WMMA fragment template shapes for the intended
+  head_dim32 structure.
+- This confirms the next MMA step should not jump straight to score. It needs a compile-only
+  build-check of a smaller structural slice first.
+
+Runtime fix:
+
+- Added validator logic that rejects patched MMA seed score commands beyond head_dim16 unless the
+  next command is an `avo compile` build-check first.
+- Added regression coverage for patched MMA shape-extension score commands.
+- Updated repo-context prompt text and runtime knowledge with the compile-first policy.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py`: `51 passed`.
+- `uv run --extra dev pytest`: `138 passed`.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `e73681a8d209b8d8094c45cf12f2825f29e0d5b2`.
+
+Tradeoffs and decision:
+
+- This slows down risky MMA shape experiments by one loop, but prevents expensive score attempts
+  from being selected before the candidate even compiles.
+- Future head_dim32 MMA attempts should use `avo compile --source
+  candidates/cuda_mma_attention/attention_kernel.cu --out-dir build/<name>` as the first command.
