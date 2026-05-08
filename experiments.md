@@ -4151,3 +4151,55 @@ Tradeoffs and decision:
   intrinsic blocker for a future, smaller cp.async smoke.
 - The 8-BF16-elements-per-16-byte-copy and disjoint scalar-tail constraints from Checkpoint 3.46
   still apply.
+
+## 2026-05-08 - Checkpoint 3.48: Reject unchanged-source timing wins
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the CUDA pipeline primitive include.
+- Detect and fix any gate issue exposed by the next accepted or rejected attempt.
+
+Loop result:
+
+- The agent made no code edit.
+- It reran the existing warp-row seed on the fixed seq256/head_dim128 BF16 case suite.
+- The rerun passed correctness and measured faster than the prior best:
+  - Noncausal: max_abs_error `0.001953125`, `0.9894400238990784` ms,
+    `0.5426007630905784` TFLOPS.
+  - Causal: max_abs_error `0.015625`, `0.6876479983329773` ms,
+    `0.3903675378256776` TFLOPS.
+  - Geomean: `0.460232249967343`.
+- The gate accepted this even though the source snapshot was unchanged. This was a timing-noise
+  acceptance, not a real kernel variation.
+
+Runtime fix:
+
+- Added a source-snapshot equality gate in `commit_score`.
+- If `candidate_patch` is empty and the current candidate source snapshot matches
+  `sources/latest` from the lineage head, the gate now rejects with
+  `candidate source is unchanged from current best`.
+- Added regression coverage for the unchanged-source rerun case.
+- Updated the runtime knowledge base to record that identical-source reruns must not advance lineage.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_lineage.py`: `11 passed`.
+- `uv run --extra dev pytest`: `136 passed`.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `b101ad682e141750d956a831b0f5e3ab41dc0210`.
+
+Lineage correction:
+
+- The no-edit accepted lineage commit was `adccd99 evolve: accept candidate`.
+- Reverted it with a normal lineage commit, `e1ca520 Revert "evolve: accept candidate"`, so the
+  latest lineage score again reflects the last source-changing accepted candidate.
+- Current nested lineage score is restored to `0.4012802607933843` geomean TFLOPS:
+  noncausal `0.4933314507556887` TFLOPS and causal `0.3264049909158355` TFLOPS.
+
+Tradeoffs and decision:
+
+- The faster no-edit sample is useful as noise evidence, but not as evolutionary progress.
+- Future accepted candidates must now both match the benchmark case signature and change the source
+  snapshot unless they carry a non-empty accepted patch.
