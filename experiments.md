@@ -3076,3 +3076,54 @@ Tradeoffs and decision:
   exposes more parallelism.
 - The current lineage best remains `0.10830947571120902` geomean TFLOPS on the multi-head
   warp-row smoke from nested lineage commit `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.25: Reject env as source inspection
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the workload cap guard.
+- If the agent uses `avo env` as a substitute for source-file inspection, reject that pattern at
+  planning time.
+
+Loop result before the fix:
+
+- The agent stayed within the tighter workload caps but selected `avo env` while describing an
+  intent to inspect `candidates/cuda_warp_rows_attention_seed.py`.
+- The command succeeded and reported the CUDA/build environment, but there was no score payload and
+  no candidate patch.
+- Gate decision: no gate decision; the loop stopped at `max_steps`.
+- No lineage commit was created; nested lineage remained at `07f1441`.
+- The decision also incorrectly described the `total_tokens=512` cap as a wrapper cap. It is an
+  orchestrator planning guard, not a source-level wrapper limit.
+
+Reliability fix:
+
+- Runtime commit `5f69266 fix: reject env as source inspection` rejects `avo env` unless the
+  planning text is about CUDA, Torch, NVCC, FlashAttention installation, or build/environment
+  diagnostics.
+- The prompt and repo context now state that `avo env` is only for CUDA/build diagnostics, not
+  source-file inspection.
+- `avo env` remains allowed for real environment checks.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py` passed, 42 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 124 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `5f692664c20c46720e1218faf2c18d419b998a49`.
+
+Tradeoffs and decision:
+
+- This removes another low-value planning escape hatch. The agent must now choose a real bounded
+  score/compile command or provide a candidate patch instead of spending a step on an environment
+  command when it wants file context.
+- The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
+  `07f1441`.
