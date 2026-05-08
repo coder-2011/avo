@@ -6032,3 +6032,52 @@ Decision:
 
 - This is structural correctness progress, not a lineage improvement. The workload signature is
   seq32/head_dim64 and remains incomparable to the current seq256/head_dim128 warp-row best.
+
+## 2026-05-08 - Checkpoint 3.97: Tiled reduction-bound non-fix guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the MMA head_dim64 proof.
+- Record whether the proposed tiled larger-shape correctness fix works.
+- Reject the exact patch pattern if it does not fix correctness.
+
+Loop result:
+
+- The agent switched to the tiled seed and proposed guarding reduction lanes outside `tile_keys`.
+- The patch initialized out-of-tile max-reduction lanes to `-inf`, out-of-tile sum-reduction lanes
+  to `0.0f`, and wrote valid lanes through `reduce[tid] = score` and `reduce[tid] = shifted`.
+- The patch applied and scored, but both causal modes still failed tolerance on
+  seq128/head_dim128 BF16.
+- Cleanup reverse-applied the patch successfully, so no source change leaked into the worktree.
+
+Score result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --attempts-dir benchmarks/attempts --loop-json
+  benchmarks/latest-loop.json --max-steps 1 --timeout-s 300 --env-file ../avo/.env.local`.
+- Candidate score command: `avo score --backend candidate --candidate
+  candidates/cuda_tiled_attention_seed.py --seq-lens 128 --total-tokens 512 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`.
+- Noncausal: failed correctness, max_abs_error `0.672119140625`, median
+  `1.0005120038986206 ms`, samples
+  `[1.132383942604065, 1.0005120038986206, 0.8937600255012512]`.
+- Causal: failed correctness, max_abs_error `0.927734375`, median
+  `0.7628480195999146 ms`, samples
+  `[0.97980797290802, 0.7352319955825806, 0.7628480195999146]`.
+- Geomean: `0.0` TFLOPS.
+- Gate decision: rejected versus best geomean `0.43185073056556733` because the candidate failed
+  correctness.
+
+Runtime change:
+
+- Planner validation now rejects the exact tiled reduction-bound guard pattern because it does not
+  fix the seq128/head_dim128 correctness failure.
+- The repo context prompt also tells agents not to repeat that `reduce[tid]` score/shifted guard
+  change.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 74 passed.
+- `uv run --extra dev pytest`: 163 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
