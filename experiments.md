@@ -5849,3 +5849,32 @@ Verification:
 - `uv run --extra dev pytest`: 159 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.93: MMA orphan k_frag guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the incomplete-removal guard.
+- Record the next generated MMA head_dim32 patch failure.
+- Add a narrow guard for the new stale-fragment pattern.
+
+Loop result:
+
+- The agent proposed another compile-first MMA head_dim32 two-chunk patch.
+- The patch used valid 16-wide WMMA chunks and explicit `__nv_bfloat16`, but inserted an orphan
+  post-QK `wmma::fragment<wmma::matrix_b, ...> k_frag;` block after storing the score tile.
+- `git apply --check` rejected the patch as corrupt before compile.
+- The lineage did not change.
+
+Runtime change:
+
+- Planner validation now rejects the exact pattern where a patch stores `score_frag`, synchronizes,
+  and then leaves a standalone post-QK `k_frag` block.
+- A valid two-chunk QK rewrite must remove all old single-chunk fragment declarations.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 71 passed.
+- `uv run --extra dev pytest`: 160 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
