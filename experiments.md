@@ -1539,3 +1539,70 @@ Tradeoffs and decision:
 - The value is that the repo now has a real tensor-core attention foothold on sm86. The next
   meaningful kernel work is either tensor-core PV on the same fixed shape or tiling this QK path
   beyond 16 keys while preserving the existing correctness gate.
+
+## 2026-05-08 - Checkpoint 3.3: add tensor-core PV to the tiny MMA seed
+
+Success criteria for this checkpoint:
+
+- Extend the fixed 16x16 BF16 MMA seed from QK-only tensor-core work to QK plus PV tensor-core work.
+- Keep the same tiny smoke shape and avoid widening the implementation before correctness is stable.
+- Preserve PyTorch SDPA correctness under the existing BF16 tolerance despite storing softmax
+  probabilities as BF16.
+- Verify SASS still contains tensor-core instructions for the revised kernel.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/candidates/cuda_mma_attention/attention_kernel.cu`.
+- The kernel now:
+  - computes QK with WMMA BF16 inputs and FP32 accumulators;
+  - computes row-wise softmax in scalar FP32;
+  - stores the 16x16 probability tile as BF16 in shared memory;
+  - computes PV with a second WMMA BF16 multiply and FP32 accumulator;
+  - stores the final output as BF16.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md` from QK wording to QK/PV wording.
+
+Online research notes:
+
+- Exa search found NVIDIA's CUTLASS Ampere FlashAttention v2 example describing the Ampere flow as
+  QK MMA, softmax, then V/PV MMA with cp.async and register pipelining around it. This checkpoint
+  implements only the smallest local correctness analogue of that two-MMA structure, not the full
+  FA2 pipeline.
+  Source: https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+- Exa search also surfaced attention-kernel papers describing forward attention as QK followed by
+  PV, with both as MMA operations around softmax. This reinforces that adding PV is the next
+  correct tensor-core foothold after the QK seed.
+  Sources:
+  - https://browse.arxiv.org/html/2312.11918v1
+  - https://www.arxiv.org/pdf/2603.05451
+
+Verification:
+
+- Clean CUDA extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_mma_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal BF16: max abs error `0.00390625`, `0.7331519722938538` ms,
+    `2.2347344915050092e-05` TFLOPS.
+  - Causal BF16: max abs error `0.015625`, `0.602944016456604` ms,
+    `1.3586667711113453e-05` TFLOPS.
+  - Geomean: `1.7424865841274845e-05` TFLOPS.
+- SASS check:
+  `cuobjdump --dump-sass /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_mma_attention_seed/avo_cuda_mma_attention_seed.so | rg -n "HMMA|MMA|BMMA|wmma|WGMMA"`
+  found four `HMMA.16816.F32.BF16` instructions, corresponding to the two WMMA calls.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 62 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- Storing probabilities as BF16 is a precision compromise made solely to use WMMA PV through the
+  public CUDA API in a tiny seed. It passed the current BF16 correctness gate, but future larger
+  shapes may need a different representation or tolerance analysis.
+- This is still not a production attention kernel. It proves the local repo can execute both
+  attention MMAs on sm86 tensor cores under the existing scorer. The next meaningful direction is
+  tiling beyond 16 keys or introducing online softmax state around multiple QK/PV tiles.
