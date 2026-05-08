@@ -6245,3 +6245,57 @@ Decision:
 
 - This is structural correctness progress, not a lineage improvement. The workload signature is
   seq64/head_dim128 and remains incomparable to the current seq256/head_dim128 warp-row best.
+
+## 2026-05-08 - Checkpoint 4.01: Manual MMA seq128/head_dim128 proof
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the seq64 MMA proof.
+- Preserve a compile-clean seq128 extension if it scores correctly.
+- Align planner caps and notes so future work targets seq256 or structural kernel changes rather
+  than repeating the no-patch seq128 score.
+
+Loop result:
+
+- The agent proposed extending the MMA seed from seq_len 64 to seq_len 128 while keeping
+  head_dim 128 and the eight 16-wide QK/PV WMMA chunks.
+- The patch changed `kMaxSeqLen` to 128 and changed `SMOKE_SEQUENCES` to
+  `{16, 32, 64, 128}`.
+- The patch applied and compiled, then was cleaned up because the loop step was compile-only.
+
+Manual runtime change:
+
+- Reapplied the seq128 cap extension and verified it from the current worktree.
+- The MMA seed now accepts seq_len 16/32/64/128, head_dim 128, total_tokens up to 512, and
+  num_heads up to 4 as the validated smoke envelope.
+- The repo context notes that the exact no-patch seq128 score is already recorded and should not
+  be repeated without a new candidate patch.
+
+Verification:
+
+- `uv run --extra cuda python -m avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/manual_mma_seq128_head_dim128`: passed on sm86 with no spills, 40 registers,
+  1 barrier, 18112 bytes shared memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and
+  28 bytes global memory.
+- `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 128 --total-tokens 512 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`:
+  all_correct true, geomean `0.1149927481033293` TFLOPS.
+- `uv run --extra dev pytest tests/test_agent.py -q`: 76 passed.
+- `uv run --extra dev pytest`: 165 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
+
+Score details:
+
+- Noncausal: correct, max_abs_error `0.00390625`, median `0.8828799724578857 ms`,
+  `0.1520226216326391` TFLOPS, samples
+  `[0.8828799724578857, 0.7262719869613647, 0.9615039825439453]`.
+- Causal: correct, max_abs_error `0.0078125`, median `0.7715200185775757 ms`,
+  `0.08698266070104863` TFLOPS, samples
+  `[0.7715200185775757, 0.8264960050582886, 0.6658560037612915]`.
+
+Decision:
+
+- This is structural correctness progress, not a lineage improvement. The workload signature is
+  seq128/head_dim128 and remains incomparable to the current seq256/head_dim128 warp-row best.
