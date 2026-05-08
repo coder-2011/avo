@@ -6663,3 +6663,38 @@ Verification:
 
 - No runtime files changed.
 - `git diff --check`: passed in the paper repo.
+
+## 2026-05-08 - Checkpoint 4.09: Scalar async-copy retry feedback
+
+Success criteria for this checkpoint:
+
+- Inspect why the previous planner rejection repeated the same invalid scalar async-copy pattern.
+- Keep the fix narrow: improve retry feedback, not the CUDA candidate search space.
+- Verify the retry hint with a unit test and run the full runtime test suite.
+
+Source refresh:
+
+- Anthropic's strict tool-use docs reinforce keeping the decision boundary schema-constrained for
+  production agent workflows. Source:
+  https://console.anthropic.com/docs/en/agents-and-tools/tool-use/strict-tool-use
+- Anthropic's tool-call handling docs recommend instructive error messages that explain what went
+  wrong and what the model should try next, instead of generic failures. Source:
+  https://console.anthropic.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+- Anthropic's tool troubleshooting docs recommend more detailed tool descriptions and examples
+  when tool use remains ambiguous. Source:
+  https://console.anthropic.com/docs/en/agents-and-tools/tool-use/troubleshooting-tool-use
+
+Implementation:
+
+- Added a validation-feedback hint for scalar BF16 async-copy proposals.
+- The retry message now explicitly says not to retry `sizeof(__nv_bfloat16)` async copies, explains
+  that 16 bytes is 8 BF16 elements, and tells the planner to choose a materially different
+  non-async patch if it cannot express a clean aligned-group async-copy diff.
+- Added a focused unit test for that retry-feedback text.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 82 tests.
+- `uv run --extra dev pytest`: passed, 171 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
