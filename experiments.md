@@ -3359,3 +3359,69 @@ Tradeoffs and decision:
 
 - This does not reject compile diagnostics outright. It makes repeated no-lineage compile work
   more visible in attempt history, so the next prompt can push toward scoring or patching.
+
+## 2026-05-08 - Checkpoint 3.32: Cap unpatched tiled scores to validated tiny smoke
+
+Success criteria for this checkpoint:
+
+- Do a small online research refresh for Ampere FlashAttention structure before the next local
+  change.
+- Score the tiled seed instead of repeating compile diagnostics.
+- If the tiled seed has a narrower correctness envelope than its wrapper allows, encode that in
+  planning validation.
+
+Research refresh:
+
+- Exa returned the same primary-source direction already captured in `knowledge/ampere.md`:
+  NVIDIA CUTLASS CuTeDSL Ampere FA2 uses cp.async global-to-shared copies, Ampere tensor-core MMA,
+  register pipelining, and online softmax; Dao-AILab's CuTe/SM80 path has the same broad structure.
+- This reinforces that tiled and warp-row seeds are structural footholds only; moving toward FA2
+  requires real patches, not more compile-only diagnostics.
+
+Local scores:
+
+- Larger tiled smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_tiled_attention_seed.py --seq-lens 128 --total-tokens 512 --num-heads 4 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  failed correctness.
+- Larger tiled noncausal case: max_abs_error `0.485504150390625`, `1.4002879858016968` ms,
+  TFLOPS `0.0`.
+- Larger tiled causal case: max_abs_error `1.4482421875`, `1.358016014099121` ms,
+  TFLOPS `0.0`.
+- Tiny tiled smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_tiled_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed correctness.
+- Tiny tiled noncausal case: max_abs_error `0.00390625`, `1.0389440059661865` ms,
+  `1.576985853512228e-05` TFLOPS.
+- Tiny tiled causal case: max_abs_error `0.015625`, `0.8979840278625488` ms,
+  `9.122656690786842e-06` TFLOPS.
+- Tiny tiled geomean: `1.1994290536675978e-05` TFLOPS.
+
+Reliability fix:
+
+- Runtime commit `f478eae fix: cap unpatched tiled seed scores` caps no-patch
+  `cuda_tiled_attention_seed.py` scores to the validated tiny smoke:
+  `seq_len=16`, `head_dim=16`, `total_tokens<=16`, and `num_heads=1`.
+- Larger tiled scores now require a non-empty `candidate_patch` that fixes or extends the kernel.
+- Runtime knowledge now records both the tiny passing score and the larger failing score.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py` passed, 47 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 130 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `f478eae4748d24cc207dbc0dc621f7e46ffd5475`.
+
+Tradeoffs and decision:
+
+- The tiled seed remains useful as a simple correctness reference and possible patch target, but
+  it is not a viable no-patch branch for the current 128-token smoke workload.
+- The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
+  `07f1441`.
