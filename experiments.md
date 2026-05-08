@@ -4352,3 +4352,44 @@ Tradeoffs and decision:
   from being selected before the candidate even compiles.
 - Future head_dim32 MMA attempts should use `avo compile --source
   candidates/cuda_mma_attention/attention_kernel.cu --out-dir build/<name>` as the first command.
+
+## 2026-05-08 - Checkpoint 3.52: Verify compile-first guard path
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after adding the compile-first guard for patched MMA shape extensions.
+- Confirm the next agent decision uses a compile-checkable patch rather than another immediate
+  patched head_dim32 score.
+
+Loop result:
+
+- The agent selected a compile-first patched step instead of a patched MMA score.
+- The patch added a small WMMA foothold to the warp-row kernel: include `<mma.h>`, add shared
+  16x16 Q/K staging, and compile a BF16 `head_dim == 16` score-tile path.
+- The patch applied cleanly and `avo compile --source
+  candidates/cuda_warp_rows_attention/attention_kernel.cu --out-dir build/warp_mma_check`
+  succeeded.
+- Cleanup reverted the patch afterward because compile-only attempts do not enter lineage.
+- The nested lineage head remained `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Compile diagnostics:
+
+- BF16 entry point: 48 registers, 1 barrier, 17984 bytes shared memory, no spills.
+- FP16 entry point: 48 registers, 1 barrier, 16896 bytes shared memory, no spills.
+- FP32 entry point: 56 registers, 1 barrier, 33280 bytes shared memory, no spills.
+
+Decision:
+
+- The compile-first guard worked, but the generated patch is not scoreable as-is.
+- It only handles a `head_dim == 16` BF16 score path for `warp_id == 0`, does not integrate WMMA
+  scores into the existing online softmax/output accumulation for all rows, and would leave that
+  branch without a final output update.
+- Runtime knowledge now records that future warp-row WMMA work should either keep the normal path
+  intact while compiling an isolated helper, or fully route all rows through a correct online-softmax
+  path before scoring.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `55499823850b22dda2061672d14d5238b0e21a7f`.
