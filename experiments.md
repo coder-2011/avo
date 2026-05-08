@@ -3876,3 +3876,49 @@ Tradeoffs and decision:
 - The fixed-case gate did exactly what it should: kept lineage at `cfe5b45` / `0.4012802607933843`
   while still preserving useful correctness information about seq512.
 - The current optimization target remains the accepted seq256 case signature.
+
+## 2026-05-08 - Checkpoint 3.42: Record compiled but incorrect MMA head-dim32 attempt
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the seq512 fixed-case rejection.
+- Capture whether the next MMA two-chunk attempt compiles and whether it passes correctness.
+
+Loop result:
+
+- The agent produced another two-chunk MMA `candidate_patch` for
+  `candidates/cuda_mma_attention_seed.py` and `candidates/cuda_mma_attention/attention_kernel.cu`.
+- Patch application succeeded and the score command ran:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 32 --total-tokens 32 --num-heads 1 --head-dim 32 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+- Unlike the previous two-chunk attempt, this one compiled and executed.
+- It failed correctness in both causal modes.
+- Noncausal case: max_abs_error `86.6435546875`, `0.6364799737930298` ms, TFLOPS `0.0`.
+- Causal case: max_abs_error `218.828125`, `0.9138879776000977` ms, TFLOPS `0.0`.
+- Gate result: rejected for failed correctness.
+- Cleanup result: checked reverse patch application succeeded.
+
+CUDA finding:
+
+- The patch widened `pv_tile` to `kTile * kHeadDim`, but left `output_acc` at `kTileElements`
+  while loops wrote `kTile * head_dim` elements.
+- That likely corrupted shared memory and explains the large tolerance failures.
+- A correct two-chunk MMA attempt must widen both `pv_tile` and `output_acc`, keep score and
+  probability tiles at `16x16`, and verify the PV store offsets for both 16-wide output chunks.
+
+Knowledge update:
+
+- Runtime commit `f8a81b2 docs: record mma two-chunk correctness failure` records this failure mode
+  in `knowledge/ampere.md`.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `f8a81b2860fa4160b8676eef33af399750b83f5a`.
+
+Tradeoffs and decision:
+
+- The MMA path is making progress from compile failure to runtime correctness failure, but it is
+  still not ready to challenge the seq256 warp-row baseline.
+- The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
+  `cfe5b45`.
