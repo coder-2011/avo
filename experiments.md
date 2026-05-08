@@ -6575,3 +6575,70 @@ Verification:
 - `uv run --extra dev pytest`: passed, 168 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.07: MMA probability-skew regression
+
+Success criteria for this checkpoint:
+
+- Run one bounded Anthropic step after the synchronous V-staging regression guard.
+- Determine whether the proposed probability-buffer skew is compile-safe and scoreable.
+- Preserve the accepted kernel only if the fixed candidate beats the current lineage best.
+- Record invalid WMMA stride constraints and measured regression evidence.
+
+Source refresh:
+
+- Exa again surfaced NVIDIA's CUTLASS Ampere FlashAttention v2 example as the relevant target
+  pattern: `cp.async`, tensor-core MMA, register pipelining, and online softmax rather than static
+  synchronous shared-memory copies. Source:
+  https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+- NVIDIA's CUDA Programming Guide documents `wmma::load_matrix_sync` alignment requirements:
+  the source pointer must be aligned and the leading dimension must be a 16-byte multiple for
+  half-type multiplicands. Source:
+  https://docs.nvidia.com/cuda/archive/13.0.3/cuda-c-programming-guide/index.html
+
+Loop result:
+
+- The agent proposed padding the MMA `probabilities` shared-memory tile from 16x16 to 16x17 and
+  loading it with `wmma::load_matrix_sync(..., kTile + 1)`.
+- The generated patch accidentally removed `kOutputElements`, so the compile command failed with
+  `identifier "kOutputElements" is undefined`.
+- The generated patch was also structurally invalid for WMMA: `kTile + 1` is 17 BF16 elements,
+  not a 16-byte-aligned leading dimension.
+
+Manual correction:
+
+- Tested the same idea with an aligned stride: `kProbabilityStride = kTile + 8`, so each row is
+  24 BF16 elements / 48 bytes.
+- Updated both probability write sites, including the causal `valid_keys == 0` zero path, and used
+  `kProbabilityStride` as the WMMA probability load leading dimension.
+- Compile passed on sm86 with no spills, 40 registers, 1 barrier, 18368 bytes shared memory,
+  400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+
+Score result:
+
+- Correctness passed for both causal modes.
+- Geomean was `0.46984155560491525` TFLOPS, below the accepted best
+  `0.4924015757468769` TFLOPS.
+
+Score details:
+
+- Noncausal: max_abs_error `0.001953125`, median `0.8241599798202515 ms`,
+  `0.6514158963616397` TFLOPS, samples
+  `[0.993120014667511, 0.8241599798202515, 0.7926080226898193]`.
+- Causal: max_abs_error `0.0078125`, median `0.7921280264854431 ms`,
+  `0.3388788769297927` TFLOPS, samples
+  `[0.6605759859085083, 0.7921280264854431, 1.000831961631775]`.
+
+Decision:
+
+- Reverted the manual probability-skew patch because it preserved correctness but regressed the
+  fixed benchmark.
+- Runtime validation now rejects `kTile + 1` probability WMMA leading dimensions and the measured
+  stride-24 probability-buffer skew repeat.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 81 tests.
+- `uv run --extra dev pytest`: passed, 170 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
