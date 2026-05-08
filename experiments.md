@@ -7061,3 +7061,41 @@ Verification:
 - `uv run --extra dev pytest`: passed, 180 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.18: Single-buffer V staging repeat guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the unused WMMA preload skeleton guard.
+- If the planner repeats an already measured regression with minor spelling changes, generalize the
+  guard rather than preserving or scoring it.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_preload_guard.json`.
+- The planner proposed static synchronous V staging again, but as a single-buffer
+  `v_shared[kTile * kHeadDim]` compile-only variant.
+- The patch applied, compiled, and cleanup reverted it.
+- No score payload was produced and the lineage did not change.
+
+Compile result:
+
+- Compile passed on sm86 with no spills, 40 registers, 1 barrier, 22208 bytes shared memory,
+  400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+
+Decision:
+
+- This is the same static synchronous V-staging direction already measured as a throughput
+  regression, only with a single buffer and compile-only command.
+- Runtime validation now rejects both `v_shared[2][kTile * kHeadDim]` and
+  `v_shared[kTile * kHeadDim]` repeats when consumed synchronously by PV WMMA without async overlap.
+- Runtime knowledge records the single-buffer repeat.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 92 tests.
+- `uv run --extra dev pytest`: passed, 181 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
