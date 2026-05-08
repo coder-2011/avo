@@ -5742,3 +5742,48 @@ Verification:
 - `uv run --extra dev pytest`: 156 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.90: WMMA scalar_t fragment guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the MMA score-fragment guard.
+- Record the next warp-row WMMA compile failure precisely enough to avoid repeating it.
+- Turn the existing explicit-WMMA-type knowledge into a validator rule.
+
+Source refresh:
+
+- Exa surfaced NVIDIA/CUTLASS material for Ampere BF16 Tensor Core and WMMA shapes.
+- The relevant source-backed direction remains to use explicit CUDA WMMA element types and valid
+  Ampere shapes, not generic PyTorch `scalar_t` fragments.
+
+Loop result:
+
+- The agent proposed adding a minimal warp-row WMMA QK skeleton inside the shared K tile loop.
+- The patch added `mma.h`, declared 16x16x16 matrix A/B fragments using `scalar_t`, and attempted
+  to store one WMMA score tile while leaving the scalar path intact.
+- The patch applied, then `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu
+  --out-dir build/warp_wmma_qk_skeleton` failed.
+- Cleanup reverse-applied the patch successfully, and the lineage did not change.
+
+Compile failure:
+
+- NVCC instantiated the templated warp-row kernel for `float`, `c10::Half`, and `c10::BFloat16`.
+- All `wmma::fragment<wmma::matrix_a|matrix_b, 16, 16, 16, scalar_t, ...>` instantiations were
+  rejected as incomplete or unsupported.
+- Future warp-row WMMA patches need explicit CUDA fragment element types, such as
+  `__nv_bfloat16`, in dtype-specific code paths.
+
+Runtime change:
+
+- Planner validation now rejects candidate patches that use `scalar_t` as a WMMA matrix fragment
+  element.
+- The repo context prompt also states that generic PyTorch WMMA fragments must use explicit CUDA
+  element types, because dispatch instantiates unsupported float/c10 types.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 68 passed.
+- `uv run --extra dev pytest`: 157 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
