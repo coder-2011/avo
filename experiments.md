@@ -5102,3 +5102,29 @@ Verification:
 - `git diff --check`: passed.
 - Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
   `2c8dfaefb5133c0455ec663e2d6a4cc80fdcf499`.
+
+## 2026-05-08 - Checkpoint 3.73: CuTe online-softmax source refresh
+
+Success criteria for this checkpoint:
+
+- Refresh source-backed guidance before another tiled-kernel loop.
+- Record the relevant online-softmax recurrence in runtime knowledge.
+
+Research result:
+
+- Exa surfaced Dao-AILab's CuTe FlashAttention online softmax helper at commit `58fe37fb`.
+- The helper computes a row scale from the previous row max to the current row max, updates row sum
+  with the prior row sum multiplied by that scale, and provides `rescale_O` to scale the accumulated
+  output before consuming the current probability tile.
+
+Decision:
+
+- The local tiled-kernel invariant remains correct:
+  `output_acc = output_acc * old_scale + tile_acc * tile_scale`, with
+  `row_sum = row_sum * old_scale + tile_sum * tile_scale`.
+- Future tiled fixes should diagnose indexing, synchronization, or bounds issues rather than
+  removing `old_scale` or `tile_scale`.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
