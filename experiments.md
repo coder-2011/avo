@@ -8700,3 +8700,65 @@ Verification:
 - `uv run --extra dev pytest`: passed, 255 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.53: Repair MMA wrapper/kernel sequence guard drift
+
+Success criteria for this checkpoint:
+
+- Fix an executable source mismatch introduced by preserving the accepted seq1024 source lane.
+- Add a low-cost regression test so the wrapper's explicit MMA sequence set cannot drift away from
+  the CUDA guard again.
+- Refresh the runtime README and knowledge notes so they reflect the accepted seq1024 lane instead
+  of the older 256-token-only state.
+
+Problem:
+
+- `candidates/cuda_mma_attention_seed.py` advertised
+  `SMOKE_SEQUENCES = {16, 32, 64, 128, 256, 1024}`.
+- After `kMaxSeqLen` was changed to `1024`, the CUDA `TORCH_CHECK` still accepted only
+  `16/32/64/128/kMaxSeqLen`. That meant wrapper-accepted seq256 inputs would fail inside the
+  extension even though seq256 remains part of the local smoke lane history.
+- The same shape would have hurt future shape graduation: if `kMaxSeqLen` later became 4096, the
+  kernel would only accept 4096 plus tiny base shapes, not intermediate wrapper-advertised lanes
+  such as 1024 or 2048.
+
+Decision:
+
+- Changed the CUDA guard to accept any multiple of `kTile` up to `kMaxSeqLen`.
+- Added `test_mma_wrapper_sequences_are_supported_by_kernel_guard`, which parses the wrapper's
+  `SMOKE_SEQUENCES`, parses the CUDA `kMaxSeqLen`, checks that wrapper sequences are multiples of
+  16 and at or below the cap, and asserts the CUDA guard uses `seq_len <= kMaxSeqLen` plus
+  `seq_len % kTile == 0`.
+- Updated the runtime README to describe the current state as an accepted seq1024 BF16 WMMA lane,
+  while keeping the "not faster than FlashAttention-2 yet" caveat explicit.
+- Updated the Ampere knowledge base with the source-drift fix and the direct seq256 regression
+  score after the change.
+
+Regression score:
+
+- Command:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 0 --timeout-s 300`
+- Result: correctness passed for both cases.
+- Noncausal: max error `0.001953125`, median `0.6199679970741272 ms`,
+  `0.8659655248879056` TFLOPS.
+- Causal: max error `0.0078125`, median `0.8414720296859741 ms`,
+  `0.3190069860078135` TFLOPS.
+- Geomean: `0.525593999281922` TFLOPS.
+
+Research note:
+
+- Exa refresh linked the next search direction back to primary Ampere/FA2 evidence:
+  FlashAttention-2 emphasizes avoiding split-K-style shared-memory traffic by splitting Q across
+  warps, while NVIDIA/CUTLASS Ampere references reinforce 16-byte `cp.async` groups and BF16
+  `mma.sync.aligned.m16n8k16` as the relevant sm86 primitive family. Sources:
+  https://arxiv.org/abs/2307.08691,
+  https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/async-copies.html,
+  https://github.com/NVIDIA/cutlass/blob/main/include/cute/arch/mma_sm80.hpp, and
+  https://github.com/NVIDIA/cutlass/blob/main/include/cutlass/arch/memory_sm80.h.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_candidate_backend.py -q`: passed, 5 tests.
+- `uv run --extra dev pytest`: passed, 256 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
