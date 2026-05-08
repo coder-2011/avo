@@ -8070,3 +8070,51 @@ Verification:
 - `uv run --extra dev pytest`: passed, 208 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.41: Unsupported M=32 WMMA guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the recorded env diagnostic guard.
+- If the planner proposes a structural query-tile expansion, let the compile gate establish whether
+  the WMMA fragment shapes are supported.
+- If unsupported, preserve that fact in validation, runtime knowledge, and the lab notebook.
+
+Source refresh:
+
+- Exa refreshed Ampere async-copy and pipeline context before this run. The useful constraint was
+  that real Ampere `cp.async` work needs aligned 16-byte global-to-shared groups, commit/wait groups,
+  and a double-buffered shared-memory consumption path, matching the existing scalar-async-copy
+  guard. Sources:
+  https://github.com/NVIDIA/cutlass/blob/main/include/cutlass/arch/memory_sm80.h and
+  https://docs.nvidia.com/cuda/ampere-tuning-guide/
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_env_guard.json`.
+- The planner proposed changing `kTile` from 16 to 32 and using 32-row WMMA fragments such as
+  accumulator/matrix_a/matrix_b `32x16x16`.
+- The patch applied, NVCC rejected it, and cleanup reverse-applied it successfully.
+- No score payload was produced and lineage stayed unchanged.
+
+Compile failure:
+
+- NVCC rejected `wmma::fragment<wmma::accumulator, 32, 16, 16, float>`.
+- NVCC rejected BF16 `wmma::matrix_a` and `wmma::matrix_b` fragments with shape `32x16x16`.
+- The failure mode was incomplete WMMA fragment types and no matching `fill_fragment` overload.
+
+Decision:
+
+- Runtime validation now rejects direct M=32 WMMA fragment probes, both literal
+  `fragment<..., 32, 16, 16, ...>` and symbolic `kTile=32` plus `fragment<..., kTile, 16, 16, ...>`.
+- Runtime knowledge records that this seed must stay on supported `16x16x16` WMMA fragments unless
+  larger query tiles are implemented with multiple supported fragments or a different dataflow.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 120 tests.
+- `uv run --extra dev pytest`: passed, 210 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
