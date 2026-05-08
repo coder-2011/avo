@@ -6642,3 +6642,24 @@ Verification:
 - `uv run --extra dev pytest`: passed, 170 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.08: Scalar async-copy planner rejection
+
+Loop result:
+
+- Ran one bounded `evolve-loop` step after the probability-skew regression guard.
+- No candidate patch was applied and no compile or score command ran.
+- The agent planner failed validation after three attempts because the proposed patch used scalar
+  BF16 `__pipeline_memcpy_async` copies.
+
+Decision:
+
+- This is the expected guard behavior. Ampere async-copy candidates must use aligned 16-byte groups
+  or a carefully justified tail path, not scalar 2-byte BF16 async copies.
+- No runtime code change is needed; the existing validator already blocks this failure mode before
+  patch application.
+
+Verification:
+
+- No runtime files changed.
+- `git diff --check`: passed in the paper repo.
