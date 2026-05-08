@@ -5357,3 +5357,39 @@ Verification:
 - `uv run --extra dev pytest`: 148 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.80: WMMA skeleton whitespace and self-break guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the tiled wrapper-cap-only guard.
+- Prevent invalid structural proof patches from reaching `git apply --check` when the diff or
+  decision text already exposes the failure.
+
+Loop result:
+
+- The agent proposed a warp-row WMMA QK scoring skeleton for `head_dim=128`.
+- The patch attempted to add `<mma.h>`, WMMA fragment declarations, eight 16-wide K chunks, a
+  `wmma::store_matrix_sync` score tile, and an early return that would keep the skeleton isolated
+  from the scalar path.
+- The patch was rejected before command execution because `git apply --check` failed.
+- No compile or score payload was produced, and the lineage did not change.
+
+Rejected patch diagnostics:
+
+- `git apply --check` reported trailing whitespace in added lines and squelched additional
+  whitespace errors.
+- The decision risk text admitted the early return would break correctness if scored.
+
+Runtime change:
+
+- Planner validation now rejects candidate patches with trailing whitespace in added diff lines.
+- Planner validation now treats `would break correctness` as self-invalid language for a non-empty
+  patch, matching the existing `will break correctness` guard.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 61 passed.
+- `uv run --extra dev pytest`: 150 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
