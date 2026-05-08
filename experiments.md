@@ -676,3 +676,115 @@ Tradeoffs and uncertainty:
 - The next implementation step is still kernel work: a tiny tiled online-softmax candidate
   with enough parallelism to replace the one-thread-per-row naive seed, while staying on
   small shapes until BF16/FP32 correctness is boring.
+
+## 2026-05-08 - Checkpoint 2.2: tiny tiled online-softmax seed
+
+Success criteria for this checkpoint:
+
+- Add a new CUDA candidate that moves beyond the one-thread-per-row naive seed without
+  overwriting that seed.
+- Use an actual tiled online-softmax update: per-tile row max, per-tile denominator,
+  output accumulator rescaling, and final normalization.
+- Keep the candidate intentionally small: tiny correctness shapes only, no `mma.sync`,
+  no `cp.async`, and no FA2-performance claim.
+- Make the agent context prefer this new tiled seed for the next bounded candidate score.
+- Address a live Anthropic reliability failure observed during verification with a small
+  transient-retry wrapper.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/candidates/cuda_tiled_attention_seed.py`.
+- Added CUDA extension sources under
+  `/home/ubuntu/avo-ampere/candidates/cuda_tiled_attention/`:
+  - `attention.cpp`;
+  - `attention_kernel.cu`.
+- The CUDA kernel shape is:
+  - one CTA per `(batch, head, query)` row;
+  - 128 threads per CTA;
+  - 32-key score tiles;
+  - FP32 score, row max, row sum, and output accumulation;
+  - online output rescaling when a later K tile increases the running row max;
+  - causal masking by limiting the K loop to `query + 1`.
+- Guardrails remain tiny:
+  - `seq_len <= 128`;
+  - `head_dim <= 128`.
+- Updated `/home/ubuntu/avo-ampere/avo/agent.py` so candidate preference is now:
+  - `cuda_tiled_attention_seed.py`;
+  - `cuda_naive_attention_seed.py`;
+  - `cuda_identity_seed.py`;
+  - `torch_sdpa_seed.py`.
+- Added agent tests for the tiled preference and fallback behavior.
+- Added Anthropic request retries for transient API failures:
+  - retry status codes: 408, 409, 429, 500, 502, 503, 504, 529;
+  - retry connection/timeout-style SDK exceptions by class name;
+  - default three attempts with exponential backoff;
+  - unit-tested with a fake 500.
+- Updated README and `knowledge/ampere.md` to describe the tiled seed as the current local
+  candidate.
+
+Online research notes:
+
+- Exa research on minimal FlashAttention examples reinforced the online-softmax structure:
+  compute a tile-local max and sum, update running max/sum, and rescale the output accumulator
+  when the running max changes.
+  Source: https://github.com/tspeterkim/flash-attention-minimal/blob/main/flash.cu
+- Exa research on CUDA softmax kernels showed the standard staged pattern for row-wise
+  reductions: per-thread local max/sum, block/warp reduction through shared memory, broadcast,
+  and normalization. The tiled seed uses the simpler shared-memory block reduction form.
+  Source: https://github.com/karpathy/llm.c/blob/master/dev/cuda/softmax_forward.cu
+- Exa research on Anthropic API errors confirmed that 500 is an internal API error, 504 is
+  timeout, and 529 is overloaded. This supports retrying transient server/rate/timeout
+  failures while still surfacing bad requests and schema errors immediately.
+  Source: https://docs.anthropic.com/en/api/errors
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest tests/test_agent.py tests/test_candidate_backend.py`:
+  22 passed before adding retry coverage.
+- `uv run --extra dev pytest tests/test_agent.py`: 19 passed after adding retry coverage.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 51 passed.
+- Clean BF16 tiled extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_tiled_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_tiled_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal BF16: max abs error `0.00390625`, 0.910 ms.
+  - Causal BF16: max abs error `0.015625`, 0.956 ms.
+  - Geomean: `1.2419097337861061e-05` TFLOPS.
+- FP32 tiled smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_tiled_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype fp32 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal FP32: max abs error `4.76837158203125e-07`, 0.804 ms.
+  - Causal FP32: max abs error `4.76837158203125e-07`, 0.828 ms.
+  - Geomean: `1.4203029795027486e-05` TFLOPS.
+- Larger BF16 tiled smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_tiled_attention_seed.py --seq-lens 64 --total-tokens 64 --num-heads 1 --head-dim 64 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.946 ms.
+  - Causal BF16: max abs error `0.0078125`, 0.642 ms.
+  - Geomean: `0.000950976739434787` TFLOPS.
+- Same 64x64 BF16 shape on the naive seed:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_naive_attention_seed.py --seq-lens 64 --total-tokens 64 --num-heads 1 --head-dim 64 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: 4.117 ms.
+  - Causal BF16: 4.136 ms.
+  - Geomean: `0.00017968202073136562` TFLOPS.
+  - This makes the tiled seed about 5.3x higher geomean on this tiny smoke, while still
+    remaining many orders of magnitude below a real FA2 target.
+- Live Anthropic planner smoke initially failed with an Anthropic 500 internal server error.
+  After adding transient retries, rerunning:
+  `uv run --extra agent python -m avo agent-plan --lineage /tmp/avo-agent-context-tiled-lineage --knowledge knowledge/ampere.md --cwd /home/ubuntu/avo-ampere --env-file /home/ubuntu/avo/.env.local`
+  passed and returned:
+  - `files_to_inspect` pointing at `cuda_tiled_attention_seed.py`, `attention_kernel.cu`,
+    and `attention.cpp`;
+  - bounded `next_command`:
+    `avo score --backend candidate --candidate candidates/cuda_tiled_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+
+Tradeoffs and uncertainty:
+
+- This is a structural improvement over the naive seed, not a competitive attention kernel.
+  It still computes dot products with scalar loops and does not stage Q/K/V tiles in shared memory.
+- The implementation intentionally avoids tensor cores and async copy until the online softmax
+  state is stable under small correctness smokes. The next kernel step should introduce either
+  multi-row CTA tiling or tensor-core QK/PV fragments, but not both at once.
