@@ -1466,3 +1466,76 @@ Tradeoffs and decision:
 - No runtime code change was needed. The live agent still selected a conservative verification
   command, which is acceptable for an empty temporary lineage but shows the next real progress
   still needs a safe edit/evaluate mutation path or a tensor-core candidate direction.
+
+## 2026-05-08 - Checkpoint 3.2: tiny BF16 WMMA QK attention seed
+
+Success criteria for this checkpoint:
+
+- Add the first local tensor-core attention candidate without attempting a production rewrite.
+- Keep the shape fixed and tiny enough to debug: BF16, sequence length 16, head dimension 16.
+- Use Ampere-compatible CUDA WMMA/BF16 on `sm_86`; do not introduce Blackwell-only assumptions.
+- Keep PyTorch SDPA as the correctness reference through the existing candidate scorer.
+- Verify that generated SASS contains tensor-core instructions, not only scalar code.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/candidates/cuda_mma_attention_seed.py`.
+- Added `/home/ubuntu/avo-ampere/candidates/cuda_mma_attention/attention.cpp`.
+- Added `/home/ubuntu/avo-ampere/candidates/cuda_mma_attention/attention_kernel.cu`.
+- The CUDA kernel handles one `(batch, head)` block for a fixed 16x16 tile:
+  - warp 0 computes the full QK score tile with CUDA WMMA BF16 inputs and FP32 accumulators;
+  - the block stores scores to shared memory;
+  - scalar code applies causal/non-causal softmax and multiplies by V;
+  - output is written as BF16.
+- Updated `/home/ubuntu/avo-ampere/avo/agent.py` so repo context prefers the new MMA seed for
+  first local candidate scoring.
+- Updated `/home/ubuntu/avo-ampere/tests/test_agent.py`, `README.md`, and `knowledge/ampere.md`.
+
+Online research notes:
+
+- Exa search found CUTLASS documentation stating that TensorOp BF16 multiply with FP32
+  accumulation is supported for compute capability 80+ and CUDA 11.4+, and that CUDA exposes
+  tensor cores through the `nvcuda::wmma` API. This supports using WMMA on the local sm86 target.
+  Sources:
+  - https://github.com/NVIDIA/cutlass/blob/main/media/docs/cpp/functionality.md
+  - https://docs.nvidia.com/cutlass/4.4.0/media/docs/cpp/functionality.html
+- Exa search found CUTLASS Ampere examples using BF16 inputs and FP32 accumulators on Ampere
+  tensor cores. I used these only as architectural confirmation; the local code is a small
+  standalone PyTorch extension and does not copy CUTLASS code.
+  Source: https://github.com/NVIDIA/cutlass/blob/d4e16f5d/examples/23_ampere_gemm_operand_reduction_fusion/ampere_gemm_operand_reduction_fusion.cu
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py candidates/cuda_mma_attention_seed.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py tests/test_candidate_backend.py`
+  passed, 25 tests.
+- Clean CUDA extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_mma_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal BF16: max abs error `0.00390625`, `0.8457919955253601` ms,
+    `1.937119301989037e-05` TFLOPS.
+  - Causal BF16: max abs error `0.015625`, `1.2148799896240234` ms,
+    `6.7430528693910166e-06` TFLOPS.
+  - Geomean: `1.1428953524986394e-05` TFLOPS.
+- SASS check:
+  `cuobjdump --dump-sass /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_mma_attention_seed/avo_cuda_mma_attention_seed.so | rg -n "HMMA|MMA|BMMA|wmma|WGMMA"`
+  found `HMMA.16816.F32.BF16`.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 62 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- This candidate is intentionally not a performance result. It uses tensor cores only for QK,
+  while softmax and PV remain scalar. It also only supports the fixed 16x16 BF16 smoke shape.
+- The value is that the repo now has a real tensor-core attention foothold on sm86. The next
+  meaningful kernel work is either tensor-core PV on the same fixed shape or tiling this QK path
+  beyond 16 keys while preserving the existing correctness gate.
