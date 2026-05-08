@@ -7268,3 +7268,38 @@ Verification:
 - `uv run --extra dev pytest`: passed, 186 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.23: Unpatched MMA score retry feedback
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the regressed QK preload chain guard.
+- If planning fails before command execution, keep the fix at the decision retry boundary.
+- Preserve the candidate source and lineage unless a patch clears validation and scoring.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_qk_preload_chain_guard.json`.
+- The planner failed validation after three attempts.
+- Final validation error: `next_command repeats a recorded unpatched MMA seed score; include
+  candidate_patch to change kernel structure before scoring`.
+- No command ran, no patch was applied, no score payload was produced, and the lineage did not
+  change.
+
+Decision:
+
+- The unpatched-score validator is correct: the accepted MMA seq256/head_dim128 score is already
+  in lineage and should not be repeated as a no-edit candidate step.
+- Added targeted retry feedback telling the planner not to retry no-edit
+  `cuda_mma_attention_seed.py` scores. To score that candidate again, it must provide a structural
+  raw diff under `candidates/cuda_mma_attention/` or choose a different diagnostic.
+- Runtime knowledge records the repeated invalid unpatched-score failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 98 tests.
+- `uv run --extra dev pytest`: passed, 187 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
