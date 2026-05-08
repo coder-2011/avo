@@ -8227,3 +8227,46 @@ Verification:
 - `uv run --extra dev pytest`: passed, 218 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.44: Transform-mode preflight tightening
+
+Success criteria for this checkpoint:
+
+- Run one bounded live loop after the transform/failure-class redesign.
+- If the live planner exposes a schema or mode-consistency gap, close that gap generally instead of
+  adding a CUDA-specific one-off guard.
+- Verify the fix with focused tests and the full suite.
+
+Source refresh:
+
+- Exa refreshed constrained CUDA-kernel tuning work before the live loop. CuTeGen-style staged
+  repair emphasizes first diagnosing failures, then applying localized structured edits instead of
+  regenerating broad patches. Source: https://www.arxiv.org/pdf/2604.01489
+
+Live loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_transform_planning.json`.
+- The planner returned `candidate_edit` beginning with `No edit;` but also supplied a
+  `candidate_transform`.
+- The transform path was malformed with whitespace-separated tokens:
+  `candidates / cud a_w arp _ rows _ attention _kernel . cu`.
+- Execution rejected the transform before running the score command, so no CUDA kernel launched, no
+  score payload was produced, and lineage stayed unchanged.
+
+Decision:
+
+- Runtime decision parsing now rejects malformed `candidate_transform.path` values before
+  execution. Transform paths must be repo-relative candidate source paths under `candidates/`, use
+  a source-file suffix, and contain no whitespace, backslashes, traversal, absolute path, or NUL.
+- Runtime decision parsing now rejects `No edit;` decisions that include any edit payload, whether
+  `candidate_transform` or raw `candidate_patch`.
+- This is a mode-preflight fix for the structured interface, not a CUDA-kernel guard.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 126 tests.
+- `uv run --extra dev pytest`: passed, 220 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
