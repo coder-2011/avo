@@ -7214,3 +7214,57 @@ Verification:
 - `uv run --extra dev pytest`: passed, 185 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.22: Regressed QK preload chain guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the malformed Q-preload fragment guard.
+- If the agent finds a compile-clean structural QK scheduling patch, score it against the current
+  seq256/head_dim128 BF16 lineage signature before deciding whether it belongs in lineage.
+- Preserve the current lineage unless the score gate improves on the accepted best.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_q_preload_guard.json`.
+- The planner proposed a QK WMMA fragment software-pipeline patch using a `k_frag_next` matrix-B
+  fragment. It loaded chunk 0 before the QK chunk loop, consumed `k_frag_next` in `mma_sync`, and
+  loaded `next_chunk` at the end of each chunk.
+- The bounded loop used a compile command, so it produced no score payload. Cleanup reverse-applied
+  the patch successfully and the lineage did not change.
+
+Compile result:
+
+- The loop compile passed on sm86 with no spills, 40 registers, 1 barrier, 18112 bytes shared
+  memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+- A manual reapply of the same patch compiled with the same resource shape.
+
+Manual score result:
+
+- Command: `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`.
+- Correctness passed for both causal modes.
+- Geomean regressed to `0.4462305013884498` TFLOPS versus the current best
+  `0.4924015757468769`.
+- Noncausal: max error `0.001953125`, median `0.9140160083770752` ms,
+  `0.5873758304882064` TFLOPS.
+- Causal: max error `0.0078125`, median `0.7918400168418884` ms,
+  `0.33900213463649714` TFLOPS.
+
+Decision:
+
+- Reverted the temporary candidate source edit after scoring.
+- Runtime validation now rejects the exact QK `k_frag_next` preload chain that compiled and
+  preserved correctness but reduced geomean throughput.
+- Runtime knowledge records the score regression so future QK scheduling work must be materially
+  different or profiler-driven.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 97 tests.
+- `uv run --extra dev pytest`: passed, 186 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
