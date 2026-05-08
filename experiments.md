@@ -4744,3 +4744,31 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `7d86b8491b3c3f3c1d0a97d790e910a40294838f`.
+
+## 2026-05-08 - Checkpoint 3.63: q-offset hoist rejection
+
+Success criteria for this checkpoint:
+
+- Run one final bounded loop after recording the malformed MMA cp.async patch.
+- Capture the result and leave both repos clean and pushed.
+
+Loop result:
+
+- The agent proposed hoisting a warp-row `q_row = q + q_offset` pointer for the global K/V path.
+- The candidate patch was rejected by `git apply --check` because the context did not match the
+  current source.
+- No patch was applied, no cleanup was required, and no lineage gate decision was made.
+
+Decision:
+
+- The current warp-row kernel already computes `q_offset` before both tile loops.
+- Introducing a `q_row` pointer is likely too small to beat timing noise, and the rejected patch also
+  tried to branch on `can_stage_shared` before the source location where that value is declared.
+- Do not repeat this as a candidate-improving direction without a larger, measurable address or load
+  scheduling change.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `c1589585a8fa9c7eaa4c1b721c79c50c5205909c`.
