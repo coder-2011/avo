@@ -4203,3 +4203,56 @@ Tradeoffs and decision:
 - The faster no-edit sample is useful as noise evidence, but not as evolutionary progress.
 - Future accepted candidates must now both match the benchmark case signature and change the source
   snapshot unless they carry a non-empty accepted patch.
+
+## 2026-05-08 - Checkpoint 3.49: Block repeated MMA compile diagnostics
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the unchanged-source scoring gate fix.
+- Prevent repeated no-edit diagnostics from consuming additional evolution steps when they only
+  restate an already-known baseline.
+
+Loop result:
+
+- The agent made no code edit and ran a compile-only diagnostic:
+  `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu --out-dir
+  build/mma_baseline_check`.
+- The current MMA seed compiled successfully for `sm_86`.
+- ptxas reported 40 registers, 1 barrier, and 3776 bytes of shared memory.
+- No candidate was scored and no lineage gate decision was made. The nested lineage head remained
+  `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Runtime fix:
+
+- Added `candidates/cuda_mma_attention/attention_kernel.cu` to the recorded no-patch compile
+  diagnostic blocklist.
+- Updated the repo-context prompt to tell the agent that MMA, warp-row, and tiled no-patch compile
+  diagnostics are already recorded and should only be compiled when build-checking a non-empty
+  `candidate_patch`.
+- Added a regression test that rejects repeated no-patch MMA compile diagnostics.
+- Updated the runtime knowledge base with the successful MMA compile details and the new policy.
+
+Research refresh:
+
+- Exa found NVIDIA's current CUDA Programming Guide async-copy and pipeline sections plus the
+  NVIDIA Ampere tuning guide as the primary references for this area.
+- Relevant constraints remain: LDGSTS / `cp.async` is for global-to-shared copies on CC 8.0+,
+  supports 4/8/16-byte copies, gets L1-bypass behavior with 16-byte copies, requires matching
+  alignment, benefits from 128-byte alignment, and needs a completion wait plus `__syncthreads()`
+  before other threads consume prefetched shared data.
+- CUDA pipeline commits should be invoked by converged warps, or waits can over-wait due warp
+  entanglement.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py`: `50 passed`.
+- `uv run --extra dev pytest`: `137 passed`.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `1fe4bc6baeb8aa4db95ec7f94bba8cff18c7f2a4`.
+
+Tradeoffs and decision:
+
+- The successful compile confirms the MMA seed still builds, but it is not evolutionary progress.
+- Future MMA work should patch the wrapper/kernel first, then compile or score that changed source.
