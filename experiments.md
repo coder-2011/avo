@@ -8573,3 +8573,63 @@ Verification:
 - `uv run --extra dev pytest`: passed, 241 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.51: Lineage lane summaries and cap-consistent scoring
+
+Success criteria for this checkpoint:
+
+- Ensure the agent sees all accepted benchmark lanes, not only `scores/latest.json`.
+- Keep the "score this compiled transform" follow-up signal alive across planning failures.
+- Prevent structured shape-graduation scores from requesting sequence lengths outside the cap that
+  the same transform expressed.
+- Run at least one live loop to validate the prompt/supervisor behavior after the lineage summary
+  change.
+
+Live loop results:
+
+- `attempts/loop_after_lineage_lane_summary.json`: with the multi-lane lineage summary, the planner
+  proposed a new seq1024 MMA shape-graduation batch (`kMaxSeqLen=1024`, add `1024` to
+  `SMOKE_SEQUENCES`). Compile passed on sm86 with no spills, 40 registers, 1 barrier, and 9920 bytes
+  shared memory. No score payload was produced, and cleanup reverted the patch.
+- `attempts/loop_after_1024_compile_followup.json`: planning failed before execution because the
+  planner returned a repeated no-patch compile diagnostic after retries.
+- `attempts/loop_after_persistent_compile_followup.json`: after making the compile-followup signal
+  persist across planning failures, the planner scored the seq1024 batch instead of compiling again.
+  The score command requested `seq_lens=1024,2048,4096`, `total_tokens=32768`, `num_heads=16`,
+  `head_dim=128`, BF16, both causal modes.
+- Seq1024 cases passed correctness:
+  - Noncausal: max error `0.001953125`, median `27.58780860900879 ms`,
+    `9.963745610959426` TFLOPS.
+  - Causal: max error `0.0078125`, median `27.701984405517578 ms`,
+    `4.961339644846` TFLOPS.
+- Seq2048 and seq4096 cases failed wrapper validation because the transform only added the seq1024
+  cap. The gate rejected the score for correctness failure.
+
+Decision:
+
+- `lineage_score_summary()` now reports the latest accepted payload and the best payload for each
+  benchmark-signature lane. The CLI uses that summary for agent prompts.
+- New benchmark signatures can be committed for unchanged source snapshots; same-signature unchanged
+  source reruns still reject as timing-noise probes.
+- Attempt history now keeps a pending compile-only structured transform follow-up active until that
+  exact transform is scored, even if planning failures occur after the compile.
+- MMA score validation now checks that requested `seq_lens` are covered by the structured transform:
+  `kMaxSeqLen` must be high enough, and the wrapper sequence set must include every non-base smoke
+  sequence requested by the score command.
+
+Research note:
+
+- Exa search on coding-agent memory and context compaction reinforced that durable, compact
+  summaries should preserve synthesized state rather than raw interaction logs. The lineage-lane
+  summary follows that pattern: it gives the planner the accepted score state needed for decisions
+  without injecting full git history or large score payloads.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_lineage.py tests/test_cli.py -q`: passed, 35 tests.
+- `uv run --extra dev pytest tests/test_evolve.py tests/test_lineage.py -q`: passed, 65 tests.
+- `uv run --extra dev pytest tests/test_agent.py tests/test_evolve.py tests/test_lineage.py -q`:
+  passed, 205 tests.
+- `uv run --extra dev pytest`: passed, 247 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
