@@ -3032,3 +3032,47 @@ Tradeoffs and decision:
   should not treat this as evidence of a faster kernel.
 - The current lineage best is now `0.10830947571120902` geomean TFLOPS on the multi-head
   `seq_len=128`, `head_dim=128`, `total_tokens=512`, `num_heads=4` smoke.
+
+## 2026-05-08 - Checkpoint 3.24: Cap unpatched workload scaling
+
+Success criteria for this checkpoint:
+
+- Prevent the agent from getting more accepted lineage commits by increasing only batch/head
+  parallelism on unchanged seed code.
+- Keep larger workload scores available when the agent provides a candidate patch that updates the
+  wrapper or kernel.
+
+Reliability fix:
+
+- Runtime commit `95340e4 fix: cap unpatched seed workload scores` extends the seed-score
+  validator beyond `seq_len` and `head_dim`.
+- For unpatched `cuda_warp_rows_attention_seed.py` scores, the validator now caps smoke commands at
+  `seq_len <= 128`, `head_dim <= 128`, `total_tokens <= 512`, and `num_heads <= 4`.
+- For unpatched `cuda_mma_attention_seed.py` scores, the validator now caps smoke commands at
+  `seq_len` 16 or 32, `head_dim` 16, `total_tokens <= 32`, and `num_heads = 1`.
+- Larger scores are still allowed with a non-empty raw `candidate_patch`, so genuine wrapper/kernel
+  extensions are not blocked.
+- `build_repo_context` now tells the agent these workload caps directly.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py` passed, 40 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 122 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `95340e449adc6188d91631707b3d62a52fc3db29`.
+
+Tradeoffs and decision:
+
+- This is a guardrail, not an optimization. It keeps the latest multi-head smoke baseline available
+  while reducing the chance that future no-patch decisions are accepted only because the workload
+  exposes more parallelism.
+- The current lineage best remains `0.10830947571120902` geomean TFLOPS on the multi-head
+  warp-row smoke from nested lineage commit `07f1441`.
