@@ -2112,3 +2112,72 @@ Tradeoffs and decision:
   use.
 - Accepted candidates that depend on files outside the scored module and companion directory still
   need an explicit dependency manifest later.
+
+## 2026-05-08 - Checkpoint 3.11: attempt-history supervisor signals
+
+Success criteria for this checkpoint:
+
+- Add the smallest useful piece of stagnation/cycling recovery from `arch.md` without creating a
+  second active agent process.
+- Detect repeated unaccepted command/edit attempts in the existing attempts-dir memory.
+- Detect a short exhaustion tail with no accepted candidates.
+- Feed the signal into later agent prompts through attempt-history summaries.
+- Preserve the hard loop cap, command allowlist, candidate patch validator, cleanup behavior, and
+  lineage gate.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/evolve.py`:
+  - attempt-history summaries now append a supervisor signal when the last 3 unaccepted attempts
+    share the same command/edit fingerprint;
+  - attempt-history summaries now append an exhaustion signal when the last 5 attempts produced no
+    accepted candidate;
+  - fingerprints are deterministic SHA-256 prefixes over `next_command`, `candidate_patch`, and
+    `files_to_inspect`;
+  - the signal is text only: it asks the Anthropic planner to choose a materially different
+    diagnostic or Ampere optimization direction, but it does not run tools or bypass gates.
+- Added `/home/ubuntu/avo-ampere/tests/test_evolve.py` coverage for repeated unaccepted attempts
+  and distinct unaccepted exhaustion tails.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md` to describe the supervisor signal and its limits.
+
+Online research notes:
+
+- Exa found a Claude-loop wrapper that uses circuit-breaker thresholds for no-progress detection,
+  repeated errors, output decline, and repeated completion signals. This supports adding
+  thresholded detection before building a richer supervisor.
+  Source: https://github.com/DmitrySolana/ralph-claude-code/blob/main/CLAUDE.md
+- Exa found a behavioral loop-detection skill that maintains a rolling window and escalates after
+  repeated similar actions. This supports comparing recent attempts by normalized fingerprints.
+  Source: https://github.com/oimiragieo/agent-studio/blob/main/.claude/skills/behavioral-loop-detection/SKILL.md
+- Exa found Clawker loop-mode docs with circuit breakers for max loops, stagnation threshold,
+  same-error threshold, per-iteration timeout, test-only loops, and completion signals. This matches
+  AVO's current direction: hard cap first, lightweight stagnation signal second.
+  Source: https://docs.clawker.dev/loops
+- Exa found autonomous-debugging loop guidance that tracks attempted-solution hashes and repeated
+  errors to avoid trying the same fix repeatedly. This supports hashing the agent's command/edit
+  surface rather than relying only on natural-language summaries.
+  Source: https://www.markaicode.com/fix-llm-infinite-loops-autonomous-debugging/
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/evolve.py tests/test_evolve.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_evolve.py tests/test_cli.py` passed, 41 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 94 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- This is not yet the full `arch.md` supervisor. It does not spawn a second Anthropic agent, inspect
+  the full lineage deeply, or inject several generated strategy proposals.
+- The signal is deliberately advisory and flows through prompt context. The existing evaluator and
+  lineage gate remain the only acceptance authority.
+- The fingerprint is intentionally coarse. It catches exact repeated command/edit surfaces and a
+  short no-acceptance tail; it will not detect semantically equivalent rewrites with different patch
+  text.
