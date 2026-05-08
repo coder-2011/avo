@@ -2824,3 +2824,57 @@ Tradeoffs and decision:
   loop a stronger correctness/performance checkpoint before asking for code edits.
 - The current lineage best is now `0.003413329681044312` geomean TFLOPS on `seq_len=128`,
   `head_dim=64`, which future accepted candidates must match or improve.
+
+## 2026-05-08 - Checkpoint 3.21: Warp-row head_dim 128 smoke accept
+
+Success criteria for this checkpoint:
+
+- Run one bounded evolution step against the current `seq_len=128`, `head_dim=64` lineage best.
+- Keep any result limited to the lineage artifact unless the agent proposes and passes a code patch.
+- Record whether the existing warp-row seed can handle `head_dim=128` at the smoke cap.
+
+Accepted command:
+
+`uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge
+knowledge/ampere.md --attempts-dir benchmarks/attempts --loop-json benchmarks/latest-loop.json
+--max-steps 1 --timeout-s 300 --env-file ../avo/.env.local`
+
+The agent selected:
+
+`avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens
+128 --total-tokens 128 --num-heads 1 --head-dim 128 --dtype bf16 --causal both --repeats 1
+--warmup 1 --trials 1 --timeout-s 300`
+
+Result:
+
+- Gate decision: accepted.
+- Acceptance reason: candidate passed correctness and throughput gate.
+- Previous best geomean: `0.003413329681044312` TFLOPS.
+- Candidate geomean: `0.007001040892301204` TFLOPS.
+- Noncausal case: seq_len 128, BF16, head_dim 128, max_abs_error `0.00390625`,
+  `0.9043840169906616` ms, `0.0092754934213821` TFLOPS.
+- Causal case: seq_len 128, BF16, head_dim 128, max_abs_error `0.0078125`,
+  `0.7937279939651489` ms, `0.005284309022599703` TFLOPS.
+- Benchmark environment: Torch `2.11.0+cu130`, CUDA `13.0`, Python `3.12.13`,
+  NVIDIA RTX A6000, `sm_86`.
+
+Lineage artifacts:
+
+- Nested lineage commit: `1ed290a evolve: accept candidate`.
+- Only `scores/latest.json` changed in the nested lineage repo.
+- The accepted source remains the same warp-row seed snapshot; no outer runtime repo files changed.
+
+Verification:
+
+- `benchmarks/latest-loop.json` reports `accepted: true`, `completed_steps: 1`, and
+  `stopped_reason: accepted`.
+- `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Outer runtime repo status was clean after the run.
+- Nested lineage status was clean after commit `1ed290a`.
+
+Tradeoffs and decision:
+
+- This is another no-patch scale-up, but it validates the current warp-row seed at the wrapper's
+  head-dim smoke cap before asking the agent for larger structural kernel edits.
+- The current lineage best is now `0.007001040892301204` geomean TFLOPS on `seq_len=128`,
+  `head_dim=128`, which future accepted candidates must match or improve.
