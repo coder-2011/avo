@@ -5787,3 +5787,35 @@ Verification:
 - `uv run --extra dev pytest`: 157 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.91: Stale tiled rescale guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the WMMA scalar_t fragment guard.
+- Decide whether the proposed tiled rescale fix still applies to the current source.
+- Prevent repeating the stale tiled rescale patch if the current kernel already contains it.
+
+Loop result:
+
+- The agent proposed fixing tiled online-softmax output accumulation by changing
+  `output_acc = tile_acc * tile_scale` to
+  `output_acc = output_acc * old_scale + tile_acc * tile_scale`.
+- The generated patch was rejected before scoring because `git apply --check` reported a corrupt
+  patch.
+- Manual inspection showed the current tiled source already contains the correct recurrence, so
+  there was no source change to apply or score.
+- The lineage did not change.
+
+Runtime change:
+
+- Planner validation now rejects candidate patches that repeat that stale tiled rescale replacement.
+- The repo context prompt also states that the current tiled kernel already has the correct
+  online-softmax output recurrence.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 69 passed.
+- `uv run --extra dev pytest`: 158 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
