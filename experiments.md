@@ -3593,3 +3593,53 @@ Tradeoffs and decision:
 - The next MMA patch should be a real two-fragment implementation, not a constant change.
 - The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
   `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.36: Block recorded no-patch compile repeats
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the invalid constant-only MMA head-dim patch.
+- If the agent falls back to a known compile-only diagnostic, make that repeat invalid unless it is
+  build-checking a real patch.
+
+Loop result before the fix:
+
+- The agent chose a no-edit compile diagnostic for
+  `candidates/cuda_warp_rows_attention/attention_kernel.cu`.
+- The compile succeeded and reproduced the already-recorded ptxas baseline:
+  BF16/Half entry points at 48 registers, 1 barrier, 16896 bytes shared memory, no spills; FP32 at
+  56 registers, 1 barrier, 33280 bytes shared memory, no spills.
+- No patch was applied, no score was run, and no lineage commit was created.
+
+Reliability fix:
+
+- Runtime commit `05afd39 fix: reject recorded compile baselines` rejects no-patch compile
+  diagnostics for sources whose ptxas baselines are already recorded:
+  `candidates/cuda_warp_rows_attention/attention_kernel.cu` and
+  `candidates/cuda_tiled_attention/attention_kernel.cu`.
+- The same sources can still be compiled when a non-empty `candidate_patch` is present, so patch
+  build-checks remain allowed.
+- The repo context now tells the planner that these no-patch compile diagnostics are already
+  recorded.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py` passed, 49 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 133 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `05afd390a358308e2601da06519e3eb2ff203b54`.
+
+Tradeoffs and decision:
+
+- This guard is intentionally narrow. It blocks repeated known no-patch compile baselines while
+  preserving compile as a build-check for real candidate patches.
+- The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
+  `07f1441`.
