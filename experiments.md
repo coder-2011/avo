@@ -1689,3 +1689,64 @@ Tradeoffs and decision:
 - The important progress is algorithmic: the local tensor-core candidate now crosses a tile
   boundary using online softmax state while remaining inside the existing isolated scorer and
   correctness gate.
+
+## 2026-05-08 - Checkpoint 3.5: bounded candidate patch substrate
+
+Success criteria for this checkpoint:
+
+- Add a minimal file-edit executor needed for the future Anthropic mutation loop.
+- Accept only ordinary unified diffs targeting candidate files under `candidates/`.
+- Reject path traversal, non-candidate paths, symlink-mode patches, existing symlink paths, binary
+  patches, renames, deletes, and mode changes before invoking Git.
+- Run `git apply --check --whitespace=error` before any real apply.
+- Do not stage, commit, score, or wire the command into the autonomous `run-decision` allowlist yet.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/avo/evolve.py` patch primitives:
+  - `PatchResult`;
+  - `paths_from_unified_diff(...)`;
+  - `apply_candidate_patch(...)`.
+- Added `avo apply-patch PATCH [--cwd PATH] [--dry-run]`.
+- Updated tests in `/home/ubuntu/avo-ampere/tests/test_evolve.py` and
+  `/home/ubuntu/avo-ampere/tests/test_cli.py`.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md`.
+
+Online research notes:
+
+- Exa search found the Git `apply` documentation: `git apply --check` checks whether a patch
+  applies without applying it, `git apply` rejects paths outside the working area by default, and
+  the docs discourage context-free `--unidiff-zero` patches because normal unified context provides
+  safety checks.
+  Source: https://git-scm.com/docs/git-apply/2.51.0
+- Exa search also found Git security advisory GHSA-r87m-v37r-cwfh / CVE-2023-23946, where crafted
+  patches involving symlinks could overwrite outside the working tree. The local `git --version`
+  reports `2.34.1`, which is in the affected version range, so this checkpoint rejects symlink
+  creation and existing symlink paths before calling `git apply`.
+  Source: https://github.com/git/git/security/advisories/GHSA-r87m-v37r-cwfh
+- The resulting design treats Git's own checks as necessary but not sufficient on this machine.
+  The allowlist parser is deliberately narrower than general `git apply`.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/evolve.py avo/cli.py tests/test_evolve.py tests/test_cli.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_evolve.py tests/test_cli.py`
+  passed, 28 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 74 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- `apply-patch` rejects useful but riskier patch forms such as renames, deletes, binary files,
+  executable mode changes, and paths with whitespace. Candidate kernels do not need those forms
+  for the next loop step.
+- This checkpoint does not yet let the Anthropic agent emit or apply edits. It adds the bounded
+  executor that a later schema-validated patch decision can call before scoring and lineage gating.
