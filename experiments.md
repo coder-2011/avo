@@ -146,3 +146,52 @@ Tradeoffs and uncertainty:
   autonomous. The next missing piece is an allowlisted variation-step executor that can take
   a validated decision, run a bounded command, record the attempt, and commit only through
   the existing correctness/throughput gate.
+
+## 2026-05-08 - Checkpoint 1.3: bounded decision command executor
+
+Success criteria for this checkpoint:
+
+- Add a minimal execution bridge from a validated variation decision to one bounded local
+  command.
+- Do not use a shell and do not allow arbitrary commands from the model.
+- Keep commit/lineage acceptance outside the model-controlled command path.
+- Record the attempted decision and command result as JSON for later diagnosis.
+- Verify command parsing, rejection behavior, execution, and attempt persistence with tests.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/avo/evolve.py` with:
+  - `command_from_decision`, which accepts only commands beginning with `avo`.
+  - A default subcommand allowlist of `env`, `compile`, and `score`.
+  - Rejection of shell control tokens such as `&&`, `|`, and redirection.
+  - `run_decision_command`, which rewrites the command to `python -m avo ...` and runs it
+    with `subprocess.run(..., shell=False, timeout=...)`.
+  - `write_attempt`, which persists a structured attempt JSON artifact.
+- Added `avo run-decision <decision.json> --attempt-json <path>` as a CLI entry point.
+- Updated the README with the `agent-plan` -> persisted JSON -> `run-decision` workflow.
+- The unit tests use a test-only allowlist for `worker-sleep` so they do not import CUDA or
+  require GPU work. The production default allowlist remains `env`, `compile`, and `score`.
+
+Online/local research notes:
+
+- Anthropic Agent SDK docs emphasize constraining tools with allowed tool lists and using
+  hooks to validate, log, block, or transform agent behavior. The local implementation is
+  not using the SDK yet, but this checkpoint mirrors that reliability pattern with a small
+  allowlist and a JSON attempt log. Source:
+  https://console.anthropic.com/docs/en/agent-sdk/structured-outputs
+- The local `pi-mono-agent` package uses validated tool calls, pre/post tool hooks, and
+  ordered tool-result persistence. I used it only as a pattern reference; no code was copied.
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 30 passed.
+
+Tradeoffs and uncertainty:
+
+- `run-decision` is intentionally not a full mutation loop. It can execute bounded AVO
+  subcommands and record attempts, but it cannot edit files, cannot run arbitrary shell,
+  and cannot directly bypass the lineage gate.
+- The next missing piece is candidate-kernel support: a concrete seed/candidate CUDA
+  extension path that can be compiled, imported in an isolated scorer, compared to PyTorch
+  SDPA, and then committed only via `commit_score`.
