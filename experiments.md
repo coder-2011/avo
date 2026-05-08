@@ -8633,3 +8633,70 @@ Verification:
 - `uv run --extra dev pytest`: passed, 247 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.52: Promoted structural preflights and seq1024 source lane
+
+Success criteria for this checkpoint:
+
+- Address the critique that prompt/guard work was still too reactive and tied to exact prior
+  failures.
+- Make recurring failure-class promotion affect hard preflight behavior, not just prompt advice.
+- Move no-edit MMA scoring away from tiny smoke workloads now that a seq1024 lane exists.
+- Preserve the accepted seq1024 runtime source change and verify the full suite.
+
+Live loop context:
+
+- `attempts/loop_after_transform_cap_validator.json`: the planner described extending
+  `kMaxSeqLen` from 256 to 1024 but omitted the edit payload, producing a planning-validation
+  failure.
+- `attempts/loop_after_extend_constant_recovery.json`: parser recovery inferred the tiny constant
+  transform and the planner produced a valid seq1024 batch compile. Compile passed on sm86 with no
+  spills, 40 registers, 1 barrier, and 9920 bytes shared memory.
+- `attempts/loop_after_repeated_compile_block.json`: after repeated-compile blocking, the planner
+  moved toward a larger cap but made the wrapper/kernel sequence caps inconsistent.
+- `attempts/loop_after_mma_compile_cap_consistency.json`: after cap-consistency validation, the
+  planner scored the prior valid seq1024 batch. The nested lineage gate accepted it as commit
+  `a9f55492223c977ea4525347145fe991f5e06174`.
+
+Seq1024 accepted lane:
+
+- Workload: `seq_len=1024`, `total_tokens=8192`, `num_heads=8`, `head_dim=128`, BF16, both causal
+  modes.
+- Noncausal: max error `0.00390625`, median `4.917280197143555 ms`,
+  `6.987549415621984` TFLOPS.
+- Causal: max error `0.0078125`, median `4.663455963134766 ms`,
+  `3.6839351158902605` TFLOPS.
+- Geomean: `5.073625790914057` TFLOPS.
+- Runtime source now preserves that lane directly: `kMaxSeqLen=1024` in the MMA CUDA source and
+  `1024` in the wrapper `SMOKE_SEQUENCES`.
+
+Decision:
+
+- Planning-risk text checks were generalized around failure classes such as no-effect skeletons,
+  incomplete/malformed edits, stale symbols, predicted compile failure, and predicted correctness
+  failure. Exact historical phrases such as one-off duplicate-line notes were removed from the
+  prompt-facing classifier.
+- The repo context now describes no-patch compiles as baseline diagnostics and describes the MMA
+  source as accepted through seq1024, rather than embedding a list of historical "do not repeat X"
+  notes.
+- Active promoted failure classes now flow into materialized transform preflight. For promoted
+  `stale_or_undefined_symbol`, the hard track rejects CUDA edits that remove a declaration while
+  still adding uses of the old identifier, and rejects duplicate local declarations in one edit.
+- WMMA fragment-shape preflight now parses added `wmma::fragment<...>` templates and resolves
+  added `constexpr int` dimensions, rejecting resolvable dimensions outside Ampere BF16 16x16x16
+  support. This replaces narrower checks for specific prior k32/m32 spellings.
+- Sequence-cap graduation is enforced structurally: increasing `kMaxSeqLen` must carry the matching
+  `SMOKE_SEQUENCES` wrapper cap in the same batch, and wrapper-only additions beyond the accepted
+  base cap are rejected.
+- No-edit MMA candidate scores below the accepted seq1024 lane are rejected. Future scoring should
+  start at seq1024 or use a structured wrapper/kernel shape-graduation batch toward realistic long
+  sequences.
+- Repeating a previously successful compile-only transform is blocked even after that transform has
+  been scored, so the planner cannot return to compile-only loops after a failed score.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 199 tests.
+- `uv run --extra dev pytest`: passed, 255 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
