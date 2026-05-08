@@ -5064,3 +5064,41 @@ Verification:
 - `git diff --check`: passed.
 - Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
   `df7b8a5399b52e3308f8eb9272ec64de51df89c5`.
+
+## 2026-05-08 - Checkpoint 3.72: Repeated tiled seed smoke guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after adding the correctness-breaking self-critique guard.
+- Prevent the agent from repeating known no-patch tiled smoke scores as progress attempts.
+
+Loop result:
+
+- The agent ran a no-edit score of `candidates/cuda_tiled_attention_seed.py` at the already-known
+  tiny shape: `seq_len=16`, `head_dim=16`, `total_tokens=16`, `num_heads=1`, BF16, both masks.
+- The score passed correctness but was too small to matter for the current lineage:
+  noncausal `2.1690319638268874e-05` TFLOPS, causal `1.0581573161156648e-05` TFLOPS, geomean
+  `1.5149841720005358e-05` TFLOPS.
+- The gate rejected it because the benchmark case signature differs from the current warp-row best.
+
+Reliability gap:
+
+- The validator capped unpatched tiled scores to the tiny validated shape, but still allowed that
+  recorded no-patch smoke to repeat.
+- The decision text also described a compile diagnostic while issuing a score command, reinforcing
+  that no-edit diagnostics need tighter usefulness checks.
+
+Runtime change:
+
+- Planner validation now rejects unpatched repeats of the recorded tiny tiled smoke score.
+- The prompt context now tells the agent that the tiled no-patch smoke is already recorded and should
+  not be repeated.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 54 passed.
+- `uv run --extra dev pytest`: 143 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
+  `2c8dfaefb5133c0455ec663e2d6a4cc80fdcf499`.
