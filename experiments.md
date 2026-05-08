@@ -4716,3 +4716,31 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `2217621afd7ff27e54037532c4545852239f7b70`.
+
+## 2026-05-08 - Checkpoint 3.62: MMA cp.async malformed patch
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the internal-32 MMA compile failure.
+- Capture whether the agent stays on the surgical MMA compile repair or switches direction.
+
+Loop result:
+
+- The agent switched to an MMA single-stage cp.async patch for the 16x16 K tile.
+- The candidate patch was rejected by `git apply --check` with
+  `error: corrupt patch at line 53`.
+- No patch was applied, no cleanup was required, and no lineage gate decision was made.
+
+Decision:
+
+- The proposed structure copied scalar BF16 elements with `__pipeline_memcpy_async` and immediately
+  committed/waited before `wmma::load_matrix_sync`.
+- That would not create a useful Ampere pipeline even if the diff had applied.
+- Future MMA cp.async attempts must use aligned 16-byte groups, meaning 8 BF16 elements per group,
+  keep scalar tails disjoint, and compile-check a clean diff before any score.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `7d86b8491b3c3f3c1d0a97d790e910a40294838f`.
