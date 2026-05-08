@@ -7139,3 +7139,37 @@ Verification:
 - `uv run --extra dev pytest`: passed, 182 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.20: Compile out-dir retry feedback
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after self-invalid patch retry feedback.
+- If the planner fails only on command-shape validation, keep the fix in retry feedback rather than
+  changing CUDA sources.
+- Keep generated compiler artifacts out of `candidates/`.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_self_invalid_feedback.json`.
+- The planner failed validation after three attempts.
+- Final validation error: `next_command --out-dir must be under: build`.
+- No command ran, no patch was applied, no score payload was produced, and the lineage did not
+  change.
+
+Decision:
+
+- The new `--out-dir` guard correctly prevents compile artifacts from being written into
+  `candidates/`, but retry feedback needed to tell the agent how to fix the command.
+- Added targeted retry feedback telling compile checks to use a repo-relative `build/<name>`
+  directory and not write compiler outputs under `candidates/`.
+- Runtime knowledge records the repeated invalid out-dir failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 94 tests.
+- `uv run --extra dev pytest`: passed, 183 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
