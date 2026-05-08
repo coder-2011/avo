@@ -4981,3 +4981,41 @@ Verification:
   `53b90824e7003831fa5e3e5bcafacca3837fad09`.
 - Runtime push/fetch verification after knowledge update: local `main` and `origin/main` both
   resolved to `400aaa5ddd2e4c375494ca8df7902d527e9fd125`.
+
+## 2026-05-08 - Checkpoint 3.70: Warp-row WMMA single-tile probe limits
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the stale MMA patch guard.
+- Capture whether the agent can produce a different Ampere direction after the supervisor reset.
+
+Research note:
+
+- Exa surfaced NVIDIA warp-level primitive guidance: participating threads must execute warp-level
+  collectives coherently. This reinforces that WMMA work must be warp-wide, not single-lane.
+
+Loop result:
+
+- The agent proposed a compile-only warp-row WMMA single-tile probe.
+- The patch added `mma.h`, WMMA fragment declarations, and a guarded QK `mma_sync` block.
+- The patch applied and compiled successfully; cleanup reverted it afterward.
+
+Compile diagnostics:
+
+- BF16/Half stayed at 48 registers, 1 barrier, 16896 bytes shared memory, and no spills.
+- FP32 stayed at 56 registers, 1 barrier, 33280 bytes shared memory, and no spills.
+
+Decision:
+
+- This probe is not scoreable.
+- The generated code gated WMMA work behind `lane == 0`, did not store the WMMA score fragment into
+  the existing `scores` array, and would be skipped on the current head_dim128 target because
+  `can_stage_shared` is false.
+- Future warp-row WMMA work must be warp-wide and must route produced score tiles into the existing
+  online-softmax/output path before scoring.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `f1e7a21b0f070d1de97057de70f41d4820ffab58`.
