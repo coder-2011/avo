@@ -6748,3 +6748,48 @@ Verification:
 - `uv run --extra dev pytest`: passed, 174 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.11: Unpatched MMA rescore rejection
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the no-op async helper wrapper guard.
+- Confirm the planner avoids the rejected async-helper pattern.
+- Reject any new loop waste discovered by that step.
+
+Loop result:
+
+- The planner avoided scalar async copies and wrapper-only async API proof patches.
+- It chose no-edit mode and rescored the current unmodified MMA seed on the accepted
+  seq256/head_dim128 BF16 suite to establish a "fresh baseline".
+- The score passed correctness but regressed the accepted lineage best, so the gate rejected it.
+- No patch was applied, no cleanup was needed, and the lineage did not change.
+
+Score result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_async_wrapper_guard.json`.
+- Candidate geomean: `0.3399665809331029` TFLOPS.
+- Accepted best geomean: `0.4924015757468769` TFLOPS.
+- Noncausal: max_abs_error `0.001953125`, median `1.0803519487380981 ms`,
+  `0.4969407540080716` TFLOPS, samples
+  `[1.0050560235977173, 1.0803519487380981, 1.1936639547348022]`.
+- Causal: max_abs_error `0.0078125`, median `1.1541759967803955 ms`,
+  `0.23257757633914394` TFLOPS, samples
+  `[1.1541759967803955, 1.228991985321045, 1.0854719877243042]`.
+
+Decision:
+
+- The no-edit rescore confirmed a prompt-only note was not enough: the runtime validator still
+  allowed recorded unpatched MMA seed scores under the current cap.
+- Runtime validation now rejects unpatched MMA seed score commands and requires a structural
+  `candidate_patch` before scoring that source again.
+- Runtime knowledge records the rejected rescore and the updated guard.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 85 tests.
+- `uv run --extra dev pytest`: passed, 174 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
