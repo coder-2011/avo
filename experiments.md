@@ -4772,3 +4772,37 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `c1589585a8fa9c7eaa4c1b721c79c50c5205909c`.
+
+## 2026-05-08 - Checkpoint 3.64: Patch failure detail in attempt history
+
+Success criteria for this checkpoint:
+
+- Improve recovery from malformed candidate patches without changing the patch application trust
+  boundary.
+- Preserve enough detail in cross-step memory for the next agent decision to distinguish corrupt
+  diffs, stale context, and other apply failures.
+
+Research note:
+
+- Exa search surfaced current agent patch-tool guidance emphasizing that failed patch application
+  should return a clear, human-readable error string so the model can recover in the next step.
+- This matches the observed local failure mode: attempt history only said `git apply --check failed`
+  while the actionable details, such as `error: corrupt patch at line 53`, were buried in the raw
+  JSON record.
+
+Runtime change:
+
+- Attempt-history summaries now include the patch result `stderr_tail` or `stdout_tail` for rejected
+  candidate patches.
+- Failed patch cleanup summaries also include the corresponding detail tail.
+- Added a regression test that records `error: corrupt patch at line 53` and verifies the summary
+  surfaces it to the next planning prompt.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_evolve.py -q`: 36 passed.
+- `uv run --extra dev pytest`: 140 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `240935a9d1bac2e9f27946f029578be926ecaf75`.
