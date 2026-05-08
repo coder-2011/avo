@@ -4915,3 +4915,36 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `50c085ea059a7336394a28c4ff2f696ffbb8cbf1`.
+
+## 2026-05-08 - Checkpoint 3.68: Warp-row packed dot-product unroll regression
+
+Success criteria for this checkpoint:
+
+- Score the same warp-row packed dot-product unroll patch that compiled cleanly.
+- Compare against the fixed seq256/head_dim128 BF16 warp-row lineage best.
+
+Loop result:
+
+- The agent re-applied the same `#pragma unroll` patch to the packed 4-wide dot-product outer loop.
+- The patched candidate scored correctly on the fixed BF16 warp-row suite with three timing trials.
+- The gate rejected the candidate because throughput regressed.
+- Cleanup reverted the patch afterward; no lineage commit was made.
+
+Score result:
+
+- Noncausal: `0.4773985262900999` TFLOPS.
+- Causal: `0.2881296921121001` TFLOPS.
+- Geomean: `0.3708809652634344` TFLOPS.
+- Current best remains `0.4012802607933843` geomean TFLOPS.
+
+Decision:
+
+- Do not repeat the packed dot-product outer-loop unroll as a candidate-improving step.
+- The compile result was clean, but the BF16 score showed the unroll hint hurt aggregate throughput,
+  mainly through the causal case.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `68b742870989771f674b6e07c37e6037b85fe316`.
