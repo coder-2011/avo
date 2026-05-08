@@ -8814,9 +8814,6 @@ Verification:
 - `uv run --extra dev pytest`: passed, 258 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
-- `uv run --extra dev pytest`: passed, 256 tests.
-- `uv run --extra dev ruff check .`: passed.
-- `git diff --check`: passed in both runtime and paper repos.
 
 ## 2026-05-08 - Checkpoint 4.55: Exact pending-transform follow-up and seq4096 lane
 
@@ -9006,3 +9003,54 @@ Decision:
 Verification:
 
 - The loop itself compiled and scored the accepted candidate successfully on A6000/sm86.
+- `uv run --extra dev pytest`: passed, 258 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.59: Bounded loop accepts seq32768 MMA lane
+
+Success criteria for this checkpoint:
+
+- Continue from the accepted seq16384 lane to the final configured long target shape.
+- Preserve the accepted seq32768 source state and update validation constants, tests, README, and
+  knowledge notes.
+- Keep correctness and timing evidence attached to the accepted lane.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_seq16384_lane.json --timeout-s 900 --env-file ../avo/.env.local`
+- Step 1: planner emitted a structured seq32768 cap batch (`kMaxSeqLen=32768`, add `32768` to
+  `SMOKE_SEQUENCES`) and compile-checked it. Compile passed with no spills, 40 registers, 1 barrier,
+  and 9920 bytes shared memory.
+- Step 2: planner reused the pending transform JSON and scored the seq32768 lane. Correctness
+  passed and the suite-aware gate accepted a new benchmark lane.
+
+Accepted seq32768 lane:
+
+- Nested lineage commit: `195ea8c` (`evolve: accept candidate`).
+- Workload: `seq_len=32768`, `total_tokens=32768`, `num_heads=16`, `head_dim=128`, BF16, both
+  causal modes, `trials=3`, `warmup=1`, `repeats=1`.
+- Noncausal: max error `0.000244140625`, median `873.764892578125 ms`,
+  `10.066887668437108` TFLOPS, timing CV `0.0007010256101198647`.
+- Causal: max error `0.0078125`, median `889.2239379882812 ms`,
+  `4.94593805139101` TFLOPS, timing CV `0.006366806227785341`.
+- Geomean: `7.056217313717174` TFLOPS.
+- Gate decision: accepted with reason `candidate established benchmark case set`.
+
+Decision:
+
+- Runtime source now carries `kMaxSeqLen=32768` and wrapper
+  `SMOKE_SEQUENCES={16, 32, 64, 128, 256, 1024, 2048, 4096, 8192, 16384, 32768}`.
+- Agent-side current MMA base sequences now include 32768, no-edit MMA scores below seq32768 are
+  treated as below the accepted validation lane, and the exact seq32768 no-edit score is recorded.
+- README and knowledge notes now describe seq32768 as the current accepted MMA lane.
+- This completes initial target-shape lane coverage. It still does not satisfy the final objective
+  of beating FlashAttention-2 on the target suite.
+
+Verification:
+
+- The loop itself compiled and scored the accepted candidate successfully on A6000/sm86.
+- `uv run --extra dev pytest`: passed, 258 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
