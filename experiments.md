@@ -3736,3 +3736,59 @@ Tradeoffs and decision:
   remaining issue is ordinary C++/indexing completeness.
 - The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
   `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.39: Accept warp-row seq256 smoke
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the partial two-chunk MMA failure.
+- Accept a candidate only if correctness passes and geomean improves the lineage best.
+- Align runtime wrapper caps and planner validation with any accepted larger smoke envelope.
+
+Loop result:
+
+- The agent patched `candidates/cuda_warp_rows_attention_seed.py`, changing
+  `MAX_SMOKE_SEQUENCE` from 128 to 256.
+- The CUDA kernel was unchanged; the patch validated that the existing warp-row global path handles
+  a larger BF16 smoke shape at head_dim 128.
+- Score command:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+- Noncausal case: correct, max_abs_error `0.001953125`, `1.0882560014724731` ms,
+  `0.4933314507556887` TFLOPS.
+- Causal case: correct, max_abs_error `0.015625`, `0.8223999738693237` ms,
+  `0.3264049909158355` TFLOPS.
+- Candidate geomean: `0.4012802607933843` TFLOPS.
+- Gate result: accepted versus prior best `0.10830947571120902`.
+- Nested lineage accepted commit: `cfe5b45cdbe31e3794d5fea0eb55d7d4d1db1e24`.
+
+Runtime updates:
+
+- Runtime commit `f4da265 feat: accept warp row seq256 smoke` commits the accepted wrapper cap,
+  updates the planner's no-patch warp-row score cap to `seq_lens<=256`,
+  `head_dim<=128`, `total_tokens<=1024`, `num_heads<=4`, and records the new
+  best in `knowledge/ampere.md`.
+- Historical rejected baselines in knowledge now say `then-current` where they reference the old
+  `0.10830947571120902` best.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py candidates/cuda_warp_rows_attention_seed.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py` passed, 49 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 133 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `f4da265e6f4ed5e07d9ab2accb5a1bedce8d9bbd`.
+
+Tradeoffs and decision:
+
+- This is a larger validated smoke envelope, not a new CUDA optimization. It is still valuable
+  because it gives the agent a higher-throughput accepted baseline and proves the warp-row global
+  path scales to `seq_len=256`.
+- The current lineage best is now `0.4012802607933843` geomean TFLOPS on nested lineage commit
+  `cfe5b45`.
