@@ -6462,6 +6462,55 @@ Verification:
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
 
+## 2026-05-08 - Checkpoint 4.05: Synchronous K staging regression
+
+Success criteria for this checkpoint:
+
+- Run another bounded Anthropic step after the shared-K indexing guard.
+- If it produces a corrected scoreable K-staging patch, compile and score it manually.
+- Keep the patch only if it passes the lineage gate; otherwise clean it up and add a repeat guard.
+
+Loop result:
+
+- The agent proposed the corrected full synchronous K-staging patch:
+  `k_shared + chunk_offset` with leading dimension `kHeadDim`, not the bad global
+  `key_start * kHeadDim` offset.
+- The bounded step compiled only and was cleaned up.
+- Manual reapplication compiled cleanly with no spills, 40 registers, 1 barrier, 22208 bytes shared
+  memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, 8 bytes `cmem[2]`, and 28 bytes global memory.
+
+Score result:
+
+- Command: `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`.
+- Correctness passed for both causal modes.
+- Geomean was `0.30611777431945414` TFLOPS, below the accepted best
+  `0.4924015757468769` TFLOPS.
+- Lineage gate rejected the candidate with reason `candidate regressed geomean throughput`.
+
+Score details:
+
+- Noncausal: max_abs_error `0.001953125`, median `1.2412480115890503 ms`,
+  `0.4325250932830868` TFLOPS, samples
+  `[1.1060160398483276, 1.2412480115890503, 1.3872640132904053]`.
+- Causal: max_abs_error `0.0078125`, median `1.2390079498291016 ms`,
+  `0.2166535380479405` TFLOPS, samples
+  `[1.155616044998169, 1.2390079498291016, 1.2886719703674316]`.
+
+Decision:
+
+- Reverted the manual K-staging patch. Synchronous staging removes repeated K global loads but adds
+  a cooperative copy and synchronization with no overlap, so it is slower.
+- Runtime validation now rejects repeat static `k_shared` MMA K staging unless the patch adds real
+  async-copy or double-buffered overlap.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
+
 ## 2026-05-08 - Checkpoint 4.06: Synchronous V staging regression
 
 Success criteria for this checkpoint:
@@ -6524,54 +6573,5 @@ Verification:
 
 - `uv run --extra dev pytest tests/test_agent.py -q`: passed, 79 tests.
 - `uv run --extra dev pytest`: passed, 168 tests.
-- `uv run --extra dev ruff check .`: passed.
-- `git diff --check`: passed in both runtime and paper repos.
-
-## 2026-05-08 - Checkpoint 4.05: Synchronous K staging regression
-
-Success criteria for this checkpoint:
-
-- Run another bounded Anthropic step after the shared-K indexing guard.
-- If it produces a corrected scoreable K-staging patch, compile and score it manually.
-- Keep the patch only if it passes the lineage gate; otherwise clean it up and add a repeat guard.
-
-Loop result:
-
-- The agent proposed the corrected full synchronous K-staging patch:
-  `k_shared + chunk_offset` with leading dimension `kHeadDim`, not the bad global
-  `key_start * kHeadDim` offset.
-- The bounded step compiled only and was cleaned up.
-- Manual reapplication compiled cleanly with no spills, 40 registers, 1 barrier, 22208 bytes shared
-  memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, 8 bytes `cmem[2]`, and 28 bytes global memory.
-
-Score result:
-
-- Command: `uv run --extra cuda python -m avo score --backend candidate --candidate
-  candidates/cuda_mma_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4
-  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`.
-- Correctness passed for both causal modes.
-- Geomean was `0.30611777431945414` TFLOPS, below the accepted best
-  `0.4924015757468769` TFLOPS.
-- Lineage gate rejected the candidate with reason `candidate regressed geomean throughput`.
-
-Score details:
-
-- Noncausal: max_abs_error `0.001953125`, median `1.2412480115890503 ms`,
-  `0.4325250932830868` TFLOPS, samples
-  `[1.1060160398483276, 1.2412480115890503, 1.3872640132904053]`.
-- Causal: max_abs_error `0.0078125`, median `1.2390079498291016 ms`,
-  `0.2166535380479405` TFLOPS, samples
-  `[1.155616044998169, 1.2390079498291016, 1.2886719703674316]`.
-
-Decision:
-
-- Reverted the manual K-staging patch. Synchronous staging removes repeated K global loads but adds
-  a cooperative copy and synchronization with no overlap, so it is slower.
-- Runtime validation now rejects repeat static `k_shared` MMA K staging unless the patch adds real
-  async-copy or double-buffered overlap.
-
-Verification:
-
-- `uv run --extra dev pytest tests/test_agent.py -q`: passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
