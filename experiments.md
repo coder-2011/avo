@@ -4883,3 +4883,35 @@ Verification:
   `e78006143ec9388195b66d1db4511021b4770492`.
 - Runtime push/fetch verification after knowledge update: local `main` and `origin/main` both
   resolved to `76e3aa7d75cef6086a3f70cdf2460b706cdeb8d7`.
+
+## 2026-05-08 - Checkpoint 3.67: Warp-row packed dot-product unroll compile check
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after adding the self-invalid patch guard.
+- Capture whether the next agent can produce a clean, compile-checkable patch.
+
+Loop result:
+
+- The agent produced a clean warp-row patch adding `#pragma unroll` before the packed 4-wide
+  dot-product outer loop in `candidates/cuda_warp_rows_attention/attention_kernel.cu`.
+- The patch applied cleanly and compiled successfully with
+  `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu --out-dir
+  build/warp_unroll_dot_product`.
+- Cleanup reverted the patch afterward because compile-only attempts do not enter lineage.
+
+Compile diagnostics:
+
+- BF16/Half stayed at 48 registers, 1 barrier, 16896 bytes shared memory, and no spills.
+- FP32 rose to 64 registers, 1 barrier, 33280 bytes shared memory, and no spills.
+
+Decision:
+
+- This is a plausible low-risk score candidate on the fixed seq256/head_dim128 BF16 warp-row suite.
+- The next loop should score the same patch rather than repeat compile-only.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `50c085ea059a7336394a28c4ff2f696ffbb8cbf1`.
