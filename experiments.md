@@ -2878,3 +2878,80 @@ Tradeoffs and decision:
   head-dim smoke cap before asking the agent for larger structural kernel edits.
 - The current lineage best is now `0.007001040892301204` geomean TFLOPS on `seq_len=128`,
   `head_dim=128`, which future accepted candidates must match or improve.
+
+## 2026-05-08 - Checkpoint 3.22: Reject out-of-cap shape-only scores
+
+Success criteria for this checkpoint:
+
+- Add one fresh Ampere/FA2 implementation guardrail to the runtime knowledge base.
+- Run one bounded loop step from the current `seq_len=128`, `head_dim=128` lineage best.
+- If the agent repeats a known shape-boundary mistake, turn it into a pre-execution validation
+  guard instead of letting future loops waste score calls.
+
+Online research:
+
+- Exa found Dao-AILab's CuTe FlashAttention forward implementation, which reimplements the
+  FlashAttention forward kernel path in CuTe and references both the SM80 and SM90 kernel lineage.
+  Useful Ampere guardrails for local patches: FP16/BF16 only, Q/K/V head dimensions aligned to
+  multiples of 8 for 16-byte access, tile-N divisible by 16, thread count a multiple of 32, and
+  shared-memory budgeting as Q plus staged K/V tiles.
+  Source: https://github.com/Dao-AILab/flash-attention/blob/58fe37fb/flash_attn/cute/flash_fwd.py
+- Runtime commit `52e990e docs: add dao cute fa2 guardrails` added this to
+  `knowledge/ampere.md` and nudged future steps toward bounded code edits rather than another
+  shape-only warp-row score.
+
+Rejected command:
+
+`uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge
+knowledge/ampere.md --attempts-dir benchmarks/attempts --loop-json benchmarks/latest-loop.json
+--max-steps 1 --timeout-s 300 --env-file ../avo/.env.local`
+
+The agent selected:
+
+`avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens
+256 --total-tokens 256 --num-heads 1 --head-dim 128 --dtype bf16 --causal both --repeats 1
+--warmup 1 --trials 1 --timeout-s 300`
+
+Result:
+
+- Gate decision: rejected.
+- Rejection reason: candidate failed correctness.
+- Previous best geomean: `0.007001040892301204` TFLOPS.
+- Candidate geomean: `0.0` TFLOPS.
+- Both causal and noncausal cases failed before timing with:
+  `RuntimeError: cuda_warp_rows_attention_seed is a tiny multi-row correctness seed; got
+  seq_len=256, head_dim=128`.
+- No candidate patch was proposed, and no lineage commit was created.
+
+Agent reliability fix:
+
+- Runtime commit `f6eaf1c fix: reject unpatched seed cap scores` now rejects this class of
+  decision before execution.
+- The validator knows the unpatched local seed caps:
+  `cuda_warp_rows_attention_seed.py` supports `seq_len <= 128` and `head_dim <= 128`;
+  `cuda_mma_attention_seed.py` supports `seq_len` 16 or 32 and `head_dim` 16.
+- Larger scores remain allowed when the decision includes a non-empty raw candidate patch, because
+  that patch may update the wrapper/kernel to support the new shape.
+- `build_repo_context` also tells the agent these caps directly.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py tests/test_agent.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py` passed, 37 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 118 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `f6eaf1c479f1ee7363d5fb9fa401ca02ad1af150`.
+
+Tradeoffs and decision:
+
+- This was not a kernel optimization, but it removes a now-observed wasted step from the agent
+  loop and keeps future shape increases tied to explicit candidate patches.
+- The current lineage best remains `0.007001040892301204` geomean TFLOPS on `seq_len=128`,
+  `head_dim=128`.
