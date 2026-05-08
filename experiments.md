@@ -6081,3 +6081,49 @@ Verification:
 - `uv run --extra dev pytest`: 163 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.98: Partial MMA head_dim128 guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the tiled reduction-bound non-fix guard.
+- Record whether the next MMA head_dim128 step is scoreable or self-invalid.
+- Add a validator guard if the patch admits it would fail correctness.
+
+Source refresh:
+
+- Exa refreshed official NVIDIA CUDA guidance before the loop: shared memory has 32 banks,
+  bank conflicts serialize same-bank warp accesses, padding is the documented fix for strided
+  bank conflicts, and Ampere asynchronous copies require careful synchronization and benefit from
+  aligned global/shared memory.
+
+Loop result:
+
+- The agent proposed extending the MMA seed from head_dim64 to head_dim128.
+- The patch changed `kHeadDim` and `SMOKE_HEAD_DIM` from 64 to 128 and added `#pragma unroll`
+  before the existing QK/PV chunk loops.
+- The patch applied and compiled, then was cleaned up because the step was compile-only.
+- The patch was self-invalid: its risk text said the four 16-wide chunks still cover only 64
+  dimensions and that scoring without a second pass would fail correctness.
+
+Compile result:
+
+- Command: `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/mma_head_dim_128_single_pass`.
+- Compile passed on sm86 with no spills, 40 registers, 1 barrier, 18112 bytes shared memory,
+  400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+- No score was run and no lineage gate decision was made.
+
+Runtime change:
+
+- Planner validation now rejects patches whose decision text says they will fail correctness.
+- It also rejects the exact partial MMA head_dim128 pattern: changing `kHeadDim` and
+  `SMOKE_HEAD_DIM` to 128 without adding a wider chunk loop or head-chunk abstraction.
+- The repo context prompt tells agents not to repeat the partial head_dim128 extension.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 76 passed.
+- `uv run --extra dev pytest`: 165 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
