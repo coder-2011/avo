@@ -2041,3 +2041,74 @@ Tradeoffs and decision:
   exhaustion.
 - There is still no no-progress fingerprinting, dynamic stop policy, or full-session planner. Those
   belong after the one-step substrate has generated enough real attempt history to tune against.
+
+## 2026-05-08 - Checkpoint 3.10: scored candidate source snapshots
+
+Success criteria for this checkpoint:
+
+- Bring accepted lineage commits closer to the architecture's `(source, score)` contract.
+- Snapshot source for accepted candidate scores even when the agent chose no patch and only scored
+  an existing candidate.
+- Include companion CUDA/C++ source directories for seed modules such as
+  `candidates/cuda_mma_attention_seed.py`.
+- Keep rejected candidates score-only/no-commit and avoid broad runtime repository commits.
+- Exclude generated artifacts such as `__pycache__`, `.pyc`, and compiled shared objects.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/evolve.py`:
+  - `finalize_attempt(..., source_root=...)` now snapshots source from the accepted
+    `score_payload["candidate_path"]`, not only files touched by an accepted patch;
+  - companion directories are inferred from scored Python seed modules, including the common
+    `_seed.py` convention (`cuda_mma_attention_seed.py` -> `cuda_mma_attention/`);
+  - source snapshots are limited to text source suffixes under `candidates/`;
+  - symlink components, path traversal, `.git`, `__pycache__`, and paths outside `candidates/`
+    are ignored;
+  - accepted patched steps still store `patches/latest.patch`.
+- Added `/home/ubuntu/avo-ampere/tests/test_evolve.py` coverage for a no-patch accepted candidate
+  with a companion `.cpp/.cu` directory and generated artifacts that must be skipped.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md` to describe the stronger source artifact behavior
+  and the remaining dependency-manifest limitation.
+
+Online research notes:
+
+- Exa found GEPA experiment-tracking docs that separate accepted candidate rows from rejected
+  proposals and log structured optimization artifacts for inspection. This supports making accepted
+  lineage artifacts more inspectable while keeping rejected attempts out of committed lineage.
+  Source: https://github.com/gepa-ai/gepa/blob/main/docs/docs/guides/experiment-tracking.md
+- Exa found W&B artifact-lineage guidance emphasizing that reproducibility needs exact code, not
+  just metrics or a git hash when code may be uncommitted. This supports storing source snapshots in
+  the lineage commit.
+  Source: https://engineersofai.com/docs/ml/ml-with-python/weights-and-biases-integration
+- Exa found Apache Hamilton lineage notes describing code versioning as lineage information tied to
+  produced artifacts. This supports keeping source and score together in the accepted commit.
+  Source: https://hamilton.incubator.apache.org/how-tos/use-hamilton-for-lineage/
+- Exa found KAPSO's git-native experimentation paper, which represents attempts as isolated,
+  reproducible git artifacts with code changes, evaluator configuration, logs, and outputs. This
+  reinforces the decision to preserve accepted source artifacts directly in the lineage repository.
+  Source: https://arxiv.org/pdf/2601.21526
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/evolve.py tests/test_evolve.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_evolve.py tests/test_lineage.py` passed, 38 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 92 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- The companion-directory inference intentionally follows the current seed naming convention rather
+  than trying to parse arbitrary Python imports. It is enough for the CUDA seed layout in this repo
+  and avoids a fragile dependency crawler.
+- Direct `commit-score` remains score-only because it still has no source root. The stronger source
+  behavior is attached to `finalize_attempt(...)`, which is what `evolve-once` and `evolve-loop`
+  use.
+- Accepted candidates that depend on files outside the scored module and companion directory still
+  need an explicit dependency manifest later.
