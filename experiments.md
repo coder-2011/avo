@@ -5507,3 +5507,46 @@ Verification:
 - `uv run --extra dev pytest`: 151 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.84: Dynamic shared-memory skeleton self-invalid guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the standalone pragma-only guard.
+- Prevent structural compile-only patches whose own risk text says they cannot improve throughput
+  and need more indexing work before scoring.
+
+Loop result:
+
+- The agent proposed a dynamic shared-memory double-buffer skeleton for future warp-row `cp.async`.
+- The patch moved the skewed K/V tiles from static 2D arrays into flat `extern __shared__` buffers,
+  added dtype-specific dynamic shared-memory sizing, and set a max dynamic shared-memory attribute.
+- The patch applied, then `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu
+  --out-dir build/warp_dyn_shared_skeleton` failed.
+- Cleanup reverse-applied the patch successfully.
+- No score payload was produced, and the lineage did not change.
+
+Compile failure:
+
+- The patch left existing 2D access sites such as `k_tiles[lane][0]`,
+  `v_tiles[key_inner][dim]`, and staged stores unchanged after converting `k_tiles` and `v_tiles`
+  to flat `scalar_t*` pointers.
+- NVCC reported `no operator "[]" matches these operands` and failed template instantiation.
+
+Reliability gap:
+
+- The risk text admitted the doubled buffers were unused.
+- It also said the patch could not improve throughput and that the existing indexing had to be
+  updated before scoring.
+
+Runtime change:
+
+- Planner validation now treats `cannot improve throughput`, `unused doubled buffers`, and
+  `must be updated before scoring` as self-invalid language for non-empty patches.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 63 passed.
+- `uv run --extra dev pytest`: 152 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
