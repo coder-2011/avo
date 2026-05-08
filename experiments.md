@@ -4016,3 +4016,50 @@ Tradeoffs and decision:
   tolerance error, but it is still not lineage-eligible.
 - The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
   `cfe5b45`.
+
+## 2026-05-08 - Checkpoint 3.45: Discourage repeated MMA baseline smoke
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the PV chunk offset guard.
+- Check whether the agent uses the new guardrail to attempt the corrected head_dim32 MMA patch.
+
+Loop result:
+
+- The agent made no code edit.
+- It reran the current MMA seed at its already-supported maximum smoke shape:
+  `seq_len=32`, `head_dim=16`, `total_tokens=32`, `num_heads=1`, BF16, both causal modes.
+- The score passed correctness in both modes.
+- Noncausal case: max_abs_error `0.001953125`, `0.5936319828033447` ms,
+  `0.00011039836447240482` TFLOPS.
+- Causal case: max_abs_error `0.00390625`, `0.5804799795150757` ms,
+  `5.6449836611718976e-05` TFLOPS.
+- Geomean TFLOPS: `7.894282511202798e-05`.
+- Gate result: rejected because the candidate benchmark cases differ from the current seq256
+  warp-row best.
+
+Decision-contract finding:
+
+- This was a valid diagnostic, but it spent a full loop on a known no-edit MMA baseline that was
+  already recorded as too small and not lineage-eligible.
+- Future no-edit MMA baseline scores should be reserved for environment/toolchain checks, not normal
+  candidate-improving steps.
+
+Knowledge update:
+
+- Runtime commit `66474bb docs: discourage repeated mma baseline smoke` records this in
+  `knowledge/ampere.md`.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `66474bb3f2f7721619bef49b8d7347a387f809e4`.
+
+Tradeoffs and decision:
+
+- The MMA seed remains a useful correctness foothold, but the active improvement path should return
+  to patching the head_dim32 two-chunk implementation or move to a fixed-case improvement on the
+  seq256 warp-row suite.
+- The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
+  `cfe5b45`.
