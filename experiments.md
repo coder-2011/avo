@@ -7923,3 +7923,56 @@ Verification:
 - `uv run --extra dev pytest`: passed, 202 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.38: Recorded warp-row diagnostic guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the thread-0 row-state guard.
+- If the planner chooses a no-edit diagnostic score, preserve the result and reject exact repeats
+  once it has served its purpose.
+- Keep the accepted direct-accumulation MMA lineage unchanged.
+
+Source refresh:
+
+- Exa refreshed Ampere FlashAttention implementation notes before this run. The useful steering
+  point was that current SM80-family FA-style paths use Ampere tensor cores, 16-byte `cp.async`,
+  online softmax, and commonly choose larger 128x64-ish forward tiles for SM8x; this supports moving
+  away from repeated 16x16 no-op preload skeletons and toward structural dataflow changes. Sources:
+  https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+  and https://github.com/Dao-AILab/flash-attention/blob/3387de49/hopper/mainloop_fwd_sm80.hpp
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_thread0_row_state_guard.json`.
+- The planner chose no-edit mode and scored the existing warp-row seed on the fixed
+  seq256/head_dim128 BF16 suite.
+- Correctness passed for both causal modes, but the gate rejected the candidate because geomean
+  regressed versus the accepted MMA direct-accumulation kernel.
+- No patch was applied and lineage stayed unchanged.
+
+Score result:
+
+- Geomean: `0.4114026673771631` TFLOPS versus accepted MMA best `0.5772885607891738`.
+- Noncausal: max error `0.001953125`, median `0.9919040203094482` ms,
+  `0.5412528843592248` TFLOPS.
+- Causal: max error `0.015625`, median `0.8584319949150085` ms,
+  `0.31270439311453807` TFLOPS.
+- Gate decision: rejected, reason `candidate regressed geomean throughput`.
+
+Decision:
+
+- Runtime validation now rejects exact no-patch warp-row seq256/head_dim128/1024-token/4-head
+  scores unless a structural `candidate_patch` changes the kernel or wrapper first.
+- Runtime retry feedback explains that the no-edit warp-row diagnostic is already recorded and
+  gate-rejected.
+- Runtime knowledge records the score and the instruction not to repeat it.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 114 tests.
+- `uv run --extra dev pytest`: passed, 204 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
