@@ -399,3 +399,60 @@ Tradeoffs and uncertainty:
 - Build output is captured in the isolated worker's stdout tail. For long compiler failures,
   the 4000-character tail may omit early lines; this was enough for the smoke but may need a
   larger artifact log during real kernel development.
+
+## 2026-05-08 - Checkpoint 1.8: one-step AVO orchestration
+
+Success criteria for this checkpoint:
+
+- Add a minimal command that performs one AVO variation step:
+  request a validated Anthropic decision, run one bounded command, persist the step, and
+  apply the lineage gate only if a score payload was produced.
+- Keep the score gate authoritative; the agent must not be able to commit directly.
+- Preserve non-score attempts as diagnostic artifacts without mutating lineage.
+- Verify the step logic with tests and run a live Anthropic smoke.
+
+Implementation:
+
+- Added `EvolutionStep` in `/home/ubuntu/avo-ampere/avo/evolve.py`.
+- `run_decision_command` now extracts a score payload from either:
+  - the outer `avo score` isolated-result JSON, or
+  - a direct `AVO_RESULT_JSON=...` worker line.
+- Added `finalize_attempt(lineage, attempt)`, which calls `commit_score` only when the
+  attempt contains a score payload.
+- Added `write_step` for persisted JSON step artifacts.
+- Added `avo evolve-once --lineage <path> --knowledge <path> --step-json <path>`.
+- Updated README with the `evolve-once` workflow.
+
+Online research notes:
+
+- Exa research on the Claude Agent SDK loop emphasized the same control split used here:
+  the model chooses a tool/action, but the application controls allowed tools, permissions,
+  hooks, and logging. Source: https://code.claude.com/docs/en/agent-sdk/agent-loop
+- Exa research on hooks/permissions highlighted pre-tool blocking and post-tool audit logging
+  as standard reliability patterns. This checkpoint implements the same idea locally with the
+  existing bounded command executor and JSON step artifacts rather than adopting the SDK yet.
+  Source: https://code.claude.com/docs/en/agent-sdk/hooks
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 45 passed.
+- Live command:
+  `uv run --extra agent python -m avo evolve-once --lineage /tmp/avo-evolve-smoke-lineage --knowledge knowledge/ampere.md --env-file /home/ubuntu/avo/.env.local --step-json /tmp/avo-evolve-smoke-step.json --timeout-s 180`
+  passed.
+- Live result:
+  - Anthropic returned bounded `next_command: "avo env"`.
+  - The executor ran `python -m avo env` successfully.
+  - The command output confirmed RTX A6000, compute capability 8.6, and
+    `-gencode=arch=compute_86,code=sm_86`.
+  - `score_payload`: null.
+  - `gate_decision`: null, so lineage did not receive an ungated/non-score commit.
+
+Tradeoffs and uncertainty:
+
+- This is one-step orchestration, not a full autonomous editing loop. It can safely run bounded
+  environment/compile/score commands and commit score payloads through the gate, but it cannot
+  yet edit candidate source files by itself.
+- The agent still tends to propose upstream FA2 files that are not present locally when lineage
+  is empty. The next prompt hardening should include a concise repo inventory and current
+  candidate paths so the next command moves toward `avo score --backend candidate ...`.
