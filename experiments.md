@@ -4645,3 +4645,40 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `bad2f88a18373adb240148f025b5f7e7544c021d`.
+
+## 2026-05-08 - Checkpoint 3.60: Two-chunk MMA compile check
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after steering away from scalar fallback unrolling.
+- Capture whether the agent can produce a smaller compile-checkable MMA head-dimension-32 slice.
+
+Loop result:
+
+- The agent generated a two-chunk MMA structural patch for
+  `candidates/cuda_mma_attention/attention_kernel.cu`.
+- The patch applied cleanly and compiled successfully with
+  `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu --out-dir
+  build/mma_two_chunk_check`.
+- Cleanup reverted the patch afterward because compile-only attempts do not enter lineage.
+- The nested lineage head remained `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Compile diagnostics:
+
+- ptxas reported 40 registers, 1 barrier, 3776 bytes shared memory, and no spills for the BF16 MMA
+  kernel on `sm_86`.
+
+Decision:
+
+- This is a useful compile-shape proof, not a correctness proof.
+- The generated patch kept `kHeadDim == 16` and the 16x16 `pv_tile`/`output_acc` buffers.
+- Its second Q/K chunk used `kHeadDim` as the global row stride, and its second PV chunk used
+  leading dimension `kHeadDim * 2` into buffers sized only for 16x16.
+- A real scoreable head_dim32 patch must widen `pv_tile` and `output_acc` to 16x32, use a 32-wide
+  row stride, and store each 16-column PV chunk inside the widened row-major tile.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `57dbb4bafe90c60c8d261a49649a684c777ca601`.
