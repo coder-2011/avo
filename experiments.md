@@ -7017,3 +7017,47 @@ Verification:
 - `uv run --extra dev pytest`: passed, 178 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.17: Unused WMMA preload skeleton guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the thread-local row-state guard.
+- Preserve only patches that compile and have a plausible path to correctness/throughput impact.
+- Clean up generated artifacts from compile-only attempts.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_row_state_guard.json`.
+- The planner proposed a QK software-pipeline skeleton with a `k_frag_next` WMMA matrix fragment.
+- The patch loaded the next key tile's first K fragment into `k_frag_next`, but did not consume it
+  in a later `wmma::mma_sync`.
+- The compile command succeeded and cleanup reverted the patch. No score payload was produced, and
+  the lineage did not change.
+
+Compile result:
+
+- Ptxas stayed at the accepted baseline resource footprint: no spills, 40 registers, 1 barrier,
+  18112 bytes shared memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+- Because the command used `--out-dir candidates/cuda_mma_attention`, it left
+  `candidates/cuda_mma_attention/attention_kernel.o`; removed that generated object file.
+
+Decision:
+
+- Treat the patch as a compile-only no-op. The unused preload cannot affect correctness or
+  throughput and likely explains the unchanged resource counts.
+- Runtime validation now rejects patches that add and load an MMA preload fragment without consuming
+  it in MMA dataflow.
+- Runtime validation now requires `avo compile --out-dir` to be under `build/`, preventing generated
+  object files from being written into `candidates/`.
+- Runtime knowledge records both rules.
+
+Verification:
+
+- `rm -f candidates/cuda_mma_attention/attention_kernel.o`: removed the generated object file.
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 91 tests.
+- `uv run --extra dev pytest`: passed, 180 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
