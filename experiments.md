@@ -7499,3 +7499,43 @@ Verification:
 - `uv run --extra dev pytest`: passed, 190 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.28: Incomplete score-skew patch guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the 2D probability-stride repeat guard.
+- If a patch's own risk text says the diff is incomplete or should be rejected, catch that at
+  decision validation.
+- Reject CUDA patches that use 2D `probabilities[row][key]` indexing without declaring
+  `probabilities` as a 2D shared tile.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_probability_2d_guard.json`.
+- The planner proposed a score-tile skew compile check using `scores[kTile][kScoreStride]`.
+- The patch applied, then compile failed.
+- Cleanup reverse-applied the patch successfully.
+- No score payload was produced and the lineage did not change.
+
+Compile result:
+
+- NVCC rejected `probabilities[row][key] = __float2bfloat16(weight);` because `probabilities`
+  remained a flat `__nv_bfloat16` shared array.
+- The decision risk text also said the patch was incomplete and should be rejected before apply.
+
+Decision:
+
+- Added `diff is incomplete` and `should be rejected` to the self-rejecting phrase list.
+- Runtime validation now rejects `probabilities[row][key]` patches unless the diff also declares
+  `probabilities` as a 2D shared-memory tile.
+- Runtime knowledge records the incomplete score-skew/probability-index failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 101 tests.
+- `uv run --extra dev pytest`: passed, 191 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
