@@ -1891,3 +1891,76 @@ Tradeoffs and decision:
   silently hiding a dirty state.
 - This still does not solve source persistence for accepted candidates in a separate lineage repo.
   It only makes rejected single-step edits safe enough to continue iterating.
+
+## 2026-05-08 - Checkpoint 3.8: accepted patch source snapshots
+
+Success criteria for this checkpoint:
+
+- Persist accepted schema-carried candidate edits into the lineage repository, not only the runtime
+  working tree.
+- Keep source persistence behind the existing correctness/throughput gate: rejected candidates must
+  not create lineage source artifacts.
+- Store enough source context to inspect the accepted patch without broadening the runtime repo's
+  commit surface.
+- Keep the implementation narrow: store the raw accepted patch and snapshots of the candidate files
+  touched by that patch.
+- Preserve the existing rejected-patch cleanup behavior.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/lineage.py`:
+  - `commit_score(...)` now accepts optional `source_files` and `candidate_patch`;
+  - accepted commits write `sources/latest/<repo-relative-candidate-path>` and
+    `patches/latest.patch` alongside `scores/latest.json`;
+  - source paths are validated to stay under `candidates/`;
+  - rejected candidates return before writing source artifacts or advancing HEAD.
+- Updated `/home/ubuntu/avo-ampere/avo/evolve.py`:
+  - `finalize_attempt(..., source_root=...)` snapshots touched candidate files when a patch was
+    applied successfully;
+  - unpatched attempts still commit only scores.
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py` so `evolve-once` passes its `--cwd` as the source
+  root for accepted source snapshots.
+- Updated tests in `/home/ubuntu/avo-ampere/tests/test_lineage.py`,
+  `/home/ubuntu/avo-ampere/tests/test_evolve.py`, and
+  `/home/ubuntu/avo-ampere/tests/test_cli.py`.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md`.
+
+Online research notes:
+
+- Exa search found EvoGit's Git-based code evolution paper, which records each concrete code
+  version as a Git commit for transparency, reproducibility, and replay of the trajectory. This
+  supports moving beyond score-only commits in the AVO lineage.
+  Source: https://arxiv.org/html/2506.02049v1
+- Exa search found program-repair work discussing Git as an efficient way to store APR histories
+  because evolutionary source changes are small and Git preserves modifications compactly. This
+  supports storing accepted patches and touched source snapshots instead of ad hoc text logs.
+  Source: https://sdl.ist.osaka-u.ac.jp/pman/pman3.cgi?DOWNLOAD=526
+- Exa search also surfaced EvoRepair's output structure, which separates high-quality accepted
+  patches from rejected/valid intermediate patches. This matches the current design: accepted source
+  artifacts go into lineage; rejected attempts stay in attempt history.
+  Source: https://github.com/nus-apr/evoRepair
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/lineage.py avo/evolve.py avo/cli.py tests/test_lineage.py tests/test_evolve.py tests/test_cli.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_lineage.py tests/test_evolve.py tests/test_cli.py`
+  passed, 44 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 89 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- The snapshot currently includes only files touched by the accepted patch, plus the raw patch. This
+  is enough to inspect and replay the accepted edit, but it is not yet a complete candidate tree
+  snapshot when unchanged companion files matter.
+- Direct `commit-score` remains score-only because it has no source root or candidate patch context.
+- This moves the lineage closer to the architecture writeup's `(source, score)` requirement, but a
+  complete multi-step autonomous search loop is still missing.
