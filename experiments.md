@@ -8762,3 +8762,55 @@ Verification:
 - `uv run --extra dev pytest`: passed, 256 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.54: Bounded loop accepts seq2048 MMA lane
+
+Success criteria for this checkpoint:
+
+- Run a bounded autonomous loop after the sequence-guard repair.
+- Commit any accepted lane into the nested lineage and preserve the accepted source patch in the
+  runtime repo.
+- Update validation constants and repo notes so the agent treats seq2048 as the current accepted
+  lane rather than seq1024.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_sequence_guard_repair.json --timeout-s 900 --env-file ../avo/.env.local`
+- Step 1: planner emitted a two-step structured batch (`kMaxSeqLen=2048`, add `2048` to
+  `SMOKE_SEQUENCES`) and compile-checked it. Compile passed with no spills, 40 registers, 1 barrier,
+  and 9920 bytes shared memory. The rejected compile-only patch was cleaned up.
+- Step 2: planner returned an invalid missing-payload decision for the same shape graduation; this
+  was recorded as a planning-validation failure.
+- Step 3: planner followed the compile signal and scored the same seq2048 batch. The score passed
+  correctness and the suite-aware gate accepted a new benchmark lane.
+
+Accepted seq2048 lane:
+
+- Nested lineage commit: `39af063` (`evolve: accept candidate`).
+- Workload: `seq_len=2048`, `total_tokens=16384`, `num_heads=16`, `head_dim=128`, BF16, both causal
+  modes.
+- Noncausal: max error `0.001953125`, median `27.609344482421875 ms`,
+  `9.955973678368473` TFLOPS.
+- Causal: max error `0.0078125`, median `27.304447174072266 ms`,
+  `5.033573930129197` TFLOPS.
+- Geomean: `7.079133390217197` TFLOPS.
+- Gate decision: accepted with reason `candidate established benchmark case set`.
+
+Decision:
+
+- Runtime source now carries `kMaxSeqLen=2048` and wrapper
+  `SMOKE_SEQUENCES={16, 32, 64, 128, 256, 1024, 2048}`.
+- Agent-side current MMA base sequences now include 2048, and no-edit MMA scores below seq2048 are
+  treated as below the accepted validation lane.
+- Patched MMA score validation now checks transformed caps before accepting a score as an in-base
+  smoke shape, so a transform that lowers or narrows `kMaxSeqLen` cannot score a larger current-base
+  sequence by accident.
+- README and knowledge notes now describe seq2048 as the current accepted MMA lane.
+
+Verification:
+
+- The loop itself compiled and scored the accepted candidate successfully on A6000/sm86.
+- `uv run --extra dev pytest`: passed, 256 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
