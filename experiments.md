@@ -1827,3 +1827,67 @@ Tradeoffs and decision:
 - A malformed diff-like patch is still rejected by the patch executor before command execution.
 - This is still a one-step loop, not a full multi-session autonomous search. The next missing layer
   is repeated edit/score/diagnose control flow with cleanup policy for rejected working-tree edits.
+
+## 2026-05-08 - Checkpoint 3.7: rejected patch cleanup
+
+Success criteria for this checkpoint:
+
+- Prevent schema-carried candidate patches from polluting the working tree after a failed or
+  non-accepted `evolve-once` step.
+- Keep accepted patched steps intact so the accepted source edit remains available for the next
+  local candidate state.
+- Record cleanup success or failure in step JSON and attempt-history summaries.
+- Surface cleanup failure as a failed `evolve-once` result.
+- Do not broaden the patch allowlist, command allowlist, or lineage gate.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/avo/evolve.py` helper `revert_candidate_patch(...)`, which
+  validates the same candidate-only patch paths and uses `git apply --reverse`.
+- Added `cleanup_rejected_candidate_patch(...)`:
+  - no-op for accepted steps;
+  - no-op for missing or rejected patches that were never applied;
+  - reverse-applies an applied patch when the step has no accepted gate decision.
+- Extended `EvolutionStep` with `patch_cleanup_result`.
+- Updated attempt-history summaries to include cleanup status.
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py` so `evolve-once` runs cleanup after finalizing
+  the attempt and returns failure if cleanup itself fails.
+- Updated `/home/ubuntu/avo-ampere/tests/test_evolve.py` and
+  `/home/ubuntu/avo-ampere/tests/test_cli.py`.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md`.
+
+Online research notes:
+
+- Exa search found the Git `apply` documentation for reverse patching: `git apply --check` checks
+  applicability without applying, `git apply --reverse` applies a patch in reverse, and default
+  `git apply` behavior is atomic unless `--reject` is used. The cleanup path uses the same pattern:
+  reverse check first, then reverse apply, with no `--reject`.
+  Sources:
+  - https://git-scm.com/docs/git-apply
+  - https://code.googlesource.com/git/+/refs/tags/v2.34.8/Documentation/git-apply.txt
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/evolve.py avo/cli.py tests/test_evolve.py tests/test_cli.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_evolve.py tests/test_cli.py`
+  passed, 34 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 85 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- Cleanup currently happens only in `evolve-once`, where the gate outcome is known. Manual
+  `run-decision` still leaves a successful patch in place because it has no lineage gate context.
+- Reverse cleanup can fail if something else mutates the same candidate paths between patch apply
+  and cleanup. In that case `evolve-once` exits non-zero and records the cleanup failure instead of
+  silently hiding a dirty state.
+- This still does not solve source persistence for accepted candidates in a separate lineage repo.
+  It only makes rejected single-step edits safe enough to continue iterating.
