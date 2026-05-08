@@ -901,3 +901,77 @@ Tradeoffs and uncertainty:
   stable performance claim.
 - The next kernel step should probably introduce tensor-core fragments for QK or PV on a tiny
   fixed head dimension, while preserving the warp-row seed as a correctness fallback.
+
+## 2026-05-08 - Checkpoint 2.4: packed dot-product loads in the warp-row seed
+
+Success criteria for this checkpoint:
+
+- Improve the current warp-row scalar seed without changing its public candidate interface or
+  adding a new kernel family.
+- Add a conservative packed-load dot-product path only for head dimensions divisible by 4.
+- Preserve a scalar fallback for odd/non-divisible head dimensions.
+- Verify the packed path on BF16 and FP32 smoke shapes.
+- Verify the scalar fallback with a deliberately odd FP32 head dimension.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/candidates/cuda_warp_rows_attention/attention_kernel.cu`.
+- Added `ScalarPack4<scalar_t>` and a `dot_product(...)` helper.
+- The helper:
+  - uses a 4-wide packed path when `head_dim % 4 == 0`;
+  - falls back to the original scalar loop otherwise;
+  - keeps FP32 accumulation.
+- Left the online softmax, row-per-warp layout, causal masking, and output accumulation
+  structure unchanged.
+- Updated `/home/ubuntu/avo-ampere/knowledge/ampere.md` to record the packed-load path and
+  its alignment caveat.
+
+Online research notes:
+
+- Exa research found NVIDIA guidance that vectorized CUDA loads/stores can reduce executed
+  instructions and improve bandwidth use, but require correct alignment of both the base
+  allocation and any offset pointer. This is why the implementation only takes the packed path
+  when the head dimension is divisible by 4 and keeps the scalar fallback.
+  Source: https://developer.nvidia.com/blog/cuda-pro-tip-increase-performance-with-vectorized-memory-access/
+- Exa research on global-memory access reinforced that coalesced sequential access across a
+  warp remains critical. This checkpoint does not solve the larger Q/K/V staging problem; it
+  only reduces per-lane dot-loop load instruction pressure before adding tensor-core complexity.
+  Source: https://developer.nvidia.com/blog/unlock-gpu-performance-global-memory-access-in-cuda/
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 52 passed.
+- Clean BF16 packed-path extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_warp_rows_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal BF16: max abs error `0.00390625`, 0.724 ms.
+  - Causal BF16: max abs error `0.015625`, 0.731 ms.
+  - Geomean: `1.59304346366579e-05` TFLOPS.
+- FP32 scalar-fallback odd-head-dim smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 18 --dtype fp32 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal FP32: max abs error `2.682209014892578e-07`, 1.044 ms.
+  - Causal FP32: max abs error `2.384185791015625e-07`, 0.841 ms.
+  - Geomean: `1.3910434145795339e-05` TFLOPS.
+- BF16 64x64 packed-path smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 64 --total-tokens 64 --num-heads 1 --head-dim 64 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.618 ms.
+  - Causal BF16: max abs error `0.0078125`, 0.702 ms.
+  - Geomean: `0.00112539256257317` TFLOPS.
+- BF16 128x128 packed-path smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 128 --total-tokens 128 --num-heads 1 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.702 ms.
+  - Causal BF16: max abs error `0.0078125`, 0.613 ms.
+  - Geomean: `0.009043551093999186` TFLOPS.
+
+Tradeoffs and uncertainty:
+
+- This is still a scalar attention seed. Packed Q/K loads reduce loop/load overhead but do not
+  address the main missing pieces: tensor-core QK/PV, shared-memory staging, and async copies.
+- The speed deltas are one-repeat tiny-shape development signals. They are useful for steering
+  the next edit, but not strong enough to claim stable performance improvement.
