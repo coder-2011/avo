@@ -228,3 +228,67 @@ Tradeoffs and uncertainty:
   orchestration, correctness gate, TFLOPS calculation path, and child-process JSON result.
 - Full benchmark runs should use the complete sequence-length suite and more repeats once
   FA2 installation/build time is handled.
+
+## 2026-05-08 - Checkpoint 1.5: candidate scoring interface
+
+Success criteria for this checkpoint:
+
+- Add a candidate backend that can be scored by the same isolated worker path as Torch SDPA
+  and FlashAttention-2.
+- Load candidate code from an explicit repo-local path rather than hard-coding a single
+  implementation.
+- Compare candidate output against PyTorch `scaled_dot_product_attention`, use the existing
+  tolerance gate, and calculate TFLOPS with the same math as the other backends.
+- Keep the initial seed candidate deliberately boring so the scorer contract is verified
+  before attempting a custom CUDA attention kernel.
+- Verify with unit tests and one real A6000 candidate smoke run.
+
+Implementation:
+
+- Added `candidate` as a scorer backend in `/home/ubuntu/avo-ampere/avo/benchmark.py`.
+- Added `--candidate <path>` to `score` and `worker-score`.
+- Candidate modules must define:
+  `attention(q, k, v, causal: bool)`.
+- The scorer passes tensors in PyTorch SDPA layout:
+  `(batch, heads, seq, head_dim)`.
+- Added `/home/ubuntu/avo-ampere/candidates/torch_sdpa_seed.py`, which delegates to PyTorch
+  SDPA. This is a correctness seed and scorer-contract fixture, not an optimization.
+- Added tests in `/home/ubuntu/avo-ampere/tests/test_candidate_backend.py` for missing
+  candidate path, loadable candidate modules, missing `attention` rejection, and structured
+  failed scores for candidate load failures.
+- Updated the README with the candidate interface and smoke command.
+
+Online research notes:
+
+- Exa research found current PyTorch docs for `torch.utils.cpp_extension` and custom C++/CUDA
+  operators. PyTorch supports compiling CUDA sources via `torch.utils.cpp_extension.load` or
+  `CUDAExtension`; CUDA files are detected and compiled with NVCC, and additional NVCC flags
+  can be supplied with `extra_cuda_cflags`.
+  Source: https://docs.pytorch.org/docs/stable/cpp_extension.html
+- PyTorch custom operator docs recommend registering real custom ops when calling into custom
+  C++/CUDA kernels, while noting that Python bindings around C++/CUDA kernels are possible but
+  compose less cleanly with PyTorch subsystems. For this scaffold, hiding any extension build
+  behind `attention(...)` is enough until the first real kernel exists.
+  Source: https://docs.pytorch.org/tutorials/advanced/cpp_custom_ops.html
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 34 passed.
+- Real candidate smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/torch_sdpa_seed.py --seq-lens 4096 --causal both --repeats 1 --warmup 1 --timeout-s 180`
+  passed through the isolated worker.
+  - `all_correct`: true.
+  - Candidate path: `candidates/torch_sdpa_seed.py`.
+  - Non-causal 4096: 9.682 ms, 113.557 TFLOPS.
+  - Causal 4096: 5.866 ms, 93.724 TFLOPS.
+  - Geomean: 103.165 TFLOPS.
+
+Tradeoffs and uncertainty:
+
+- This checkpoint enables candidate scoring, but it does not yet add a custom CUDA attention
+  kernel. The seed candidate delegates to PyTorch SDPA specifically to prove the scorer
+  contract before adding extension build complexity.
+- The next candidate-kernel checkpoint should add the smallest CUDA extension-backed candidate
+  behind this interface and verify that the extension builds for `sm_86` without weakening
+  the correctness gate.
