@@ -4461,3 +4461,44 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `4e683c0e4616c30caca3c4091ef364fe055231a7`.
+
+## 2026-05-08 - Checkpoint 3.55: Double-buffer cp.async static shared-memory limit
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the cp.async header smoke.
+- Let the agent attempt a more concrete cp.async structural patch, then capture compile feedback.
+
+Loop result:
+
+- The agent attempted a double-buffered cp.async structural patch in the warp-row shared K/V staging
+  path.
+- The patch added a second K/V shared tile buffer and used `__pipeline_memcpy_async`,
+  `__pipeline_commit`, and `__pipeline_wait_prior`.
+- The patch applied cleanly, but compile failed.
+- Cleanup reverted the patch afterward; no source remained modified and no lineage gate decision was
+  made.
+- The nested lineage head remained `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Compile finding:
+
+- BF16 and FP16 entry points reached ptxas with 56 registers, 1 barrier, 33280 bytes shared memory,
+  and no spills.
+- The FP32 entry point used 66048 bytes of static shared memory and failed ptxas:
+  `uses too much shared data (0x10200 bytes, 0xc000 max)`.
+- The full translation unit fails while the FP32 template instantiation is emitted, even if the
+  target scoring path would be BF16.
+
+Decision:
+
+- Double-buffering the current static K/V tiles naively is not viable while the templated source
+  emits FP32 with doubled buffers.
+- Future double-buffering must avoid doubling FP32 static buffers, reduce the staged footprint, split
+  dtype-specific kernels, or use dynamic shared memory plus the required launch attribute for
+  above-48KB per-block allocation.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `a75b2425de54c8ecbe7009019e42f0f69f361474`.
