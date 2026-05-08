@@ -4806,3 +4806,40 @@ Verification:
 - `git diff --check`: passed.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `240935a9d1bac2e9f27946f029578be926ecaf75`.
+
+## 2026-05-08 - Checkpoint 3.65: MMA unroll compile check
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after adding patch failure details to attempt history.
+- Verify whether the richer failure detail helps the agent avoid another malformed patch.
+
+Loop result:
+
+- The agent produced a clean MMA patch adding `#pragma unroll` before several helper loops in
+  `candidates/cuda_mma_attention/attention_kernel.cu`.
+- The patch applied cleanly and compiled successfully with
+  `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu --out-dir
+  build/mma_unroll_pragmas`.
+- Cleanup reverted the patch afterward because compile-only attempts do not enter lineage.
+- The nested lineage head remained `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Compile diagnostics:
+
+- ptxas reported 40 registers, 1 barrier, 3776 bytes shared memory, and no spills for the BF16 MMA
+  kernel on `sm_86`, unchanged from the baseline MMA compile diagnostics.
+
+Decision:
+
+- The richer attempt-history detail appears to have helped steer away from another corrupt/stale
+  diff, but the result is still compile-only.
+- This patch is not a useful lineage candidate by itself because the MMA wrapper remains limited to
+  the tiny seq32/head_dim16 case signature, which differs from the seq256/head_dim128 warp-row best.
+- Do not repeat the same compile-only unroll step; any future MMA unroll score needs a deliberately
+  reseeded MMA benchmark or a wrapper/kernel extension that can compete on the target suite.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `1512a872dc62a6a9adca70bba64ee421d954901f`.
