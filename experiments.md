@@ -6182,3 +6182,66 @@ Decision:
 
 - This is structural correctness progress, not a lineage improvement. The workload signature is
   seq32/head_dim128 and remains incomparable to the current seq256/head_dim128 warp-row best.
+
+## 2026-05-08 - Checkpoint 4.00: Manual MMA seq64/head_dim128 proof
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the manual MMA head_dim128 proof.
+- Preserve a correctness-proven seq64 extension if it passes both causal modes.
+- Align the planner context, score validator, README, and knowledge notes with the new cap.
+
+Source refresh:
+
+- Exa refreshed Ampere FlashAttention/CUTLASS context before the loop: NVIDIA's CUTLASS
+  CuTeDSL Ampere FlashAttention v2 example combines `cp.async`, Ampere tensor-core MMA,
+  register pipelining, online softmax, and output rescaling, while FlashAttention-2's sm8x
+  head_dim128 heuristic uses smaller N-blocks on sm86. This supports continuing with small,
+  correctness-proven tile extensions before adding async-copy overlap.
+
+Loop result:
+
+- The agent proposed extending the MMA seed from seq_len 16/32 to seq_len 64 while keeping
+  head_dim 128 and the eight 16-wide QK/PV WMMA chunks.
+- The patch changed `SMOKE_SEQUENCES` to `{16, 32, 64}`, changed `kMaxSeqLen` to 64, and scored
+  `seq_len=64`, `total_tokens=256`, `num_heads=4`, `head_dim=128`, BF16, both causal modes.
+- The patched score passed correctness but the lineage gate rejected it because the case signature
+  differs from the current seq256/head_dim128 warp-row best.
+- Cleanup reverse-applied the patch successfully, so no source change leaked from the orchestrator.
+
+Manual runtime change:
+
+- Reapplied the seq64 cap extension and verified it from the current worktree.
+- The MMA seed now accepts seq_len 16/32/64, head_dim 128, total_tokens up to 256, and num_heads up
+  to 4 as the validated smoke envelope.
+- The repo context notes that the exact no-patch seq64 score is already recorded and should not be
+  repeated without a new candidate patch.
+
+Verification:
+
+- `uv run --extra cuda python -m avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/manual_mma_seq64_head_dim128`: passed on sm86 with no spills, 40 registers,
+  1 barrier, 18112 bytes shared memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and
+  28 bytes global memory.
+- `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 64 --total-tokens 256 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`:
+  all_correct true, geomean `0.03636815047603261` TFLOPS.
+- `uv run --extra dev pytest tests/test_agent.py -q`: 76 passed.
+- `uv run --extra dev pytest`: 165 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
+
+Score details:
+
+- Noncausal: correct, max_abs_error `0.00390625`, median `0.6896960139274597 ms`,
+  `0.04865104527562075` TFLOPS, samples
+  `[0.5594239830970764, 0.6896960139274597, 0.7299839854240417]`.
+- Causal: correct, max_abs_error `0.0078125`, median `0.6171200275421143 ms`,
+  `0.027186309390769315` TFLOPS, samples
+  `[0.6171200275421143, 0.6223679780960083, 0.5373119711875916]`.
+
+Decision:
+
+- This is structural correctness progress, not a lineage improvement. The workload signature is
+  seq64/head_dim128 and remains incomparable to the current seq256/head_dim128 warp-row best.
