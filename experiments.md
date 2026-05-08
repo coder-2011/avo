@@ -4612,3 +4612,36 @@ Verification:
 - `git diff --check`: passed.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `6e160162f6a27c9d57092b4c679686ce4a8e9826`.
+
+## 2026-05-08 - Checkpoint 3.59: Scalar fallback unroll rejection
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after adding rejected-patch cleanup verification.
+- Capture the result without allowing another malformed patch direction to repeat.
+
+Loop result:
+
+- The agent proposed adding `#pragma unroll` to the scalar fallback in
+  `dot_product`.
+- The candidate patch was rejected by `git apply --check`:
+  `error: patch failed: candidates/cuda_warp_rows_attention/attention_kernel.cu:56`.
+- No patch was applied, no cleanup was required, and no lineage gate decision was made.
+- Runtime and lineage worktrees remained clean.
+
+Decision:
+
+- The generated patch referenced `qv`, `kv`, and `inner` in the scalar fallback, but those names
+  only exist in the packed divisible-by-4 branch.
+- The fixed benchmark head dimension is 128, so the current path uses the packed branch rather than
+  the scalar fallback.
+- Exa research found NVIDIA CUTLASS loop-unrolling guidance: unrolling is most relevant when trip
+  counts are compile-time constants. The scalar fallback loop uses runtime `head_dim`.
+- Do not spend another candidate on scalar fallback unrolling unless the benchmark suite includes an
+  odd/non-packed head dimension.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `bad2f88a18373adb240148f025b5f7e7544c021d`.
