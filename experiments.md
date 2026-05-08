@@ -3690,3 +3690,49 @@ Tradeoffs and decision:
   to a different patch direction.
 - The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
   `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.38: Record partial two-chunk MMA patch failure
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the unsafe cp.async patch shape.
+- See whether the planner can produce the intended two-16-wide MMA head-dim-32 patch.
+
+Loop result:
+
+- The agent produced a two-chunk `candidate_patch` for the MMA seed and selected a head-dim-32
+  score command.
+- Patch application succeeded, the bounded score command ran, and rejected-patch cleanup succeeded.
+- The noncausal case failed during CUDA compilation.
+- The causal case also failed, reporting the old head-dim guard after the failed extension build.
+- Gate result: rejected with candidate geomean `0.0` versus current best
+  `0.10830947571120902`.
+
+Compile failure:
+
+- The patch correctly moved toward 16-wide WMMA chunks, but only partially converted the original
+  `kHeadDim` constant.
+- Stale `linear / kHeadDim` expressions remained after `kHeadDim` was removed.
+- The final output loop redeclared `row` after adding a new `linear / head_dim` calculation.
+- The patch also needed a clearer separation between score tile size (`16x16`) and output tile size
+  (`16xhead_dim`) so `pv_tile` and `output_acc` are sized/indexed for head_dim 32.
+
+Knowledge update:
+
+- Runtime commit `0ccf909 docs: record partial mma two-chunk failure` records that a correct
+  two-chunk patch must consistently use runtime `head_dim` for row/dim indexing and global strides,
+  size output accumulators for the maximum supported head dimension, and avoid duplicate local
+  declarations in the final store loop.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `0ccf9090a40d9d656e1480709df2dc88e2e37adf`.
+
+Tradeoffs and decision:
+
+- This is still a useful failure: the planner is now targeting the right WMMA decomposition, and the
+  remaining issue is ordinary C++/indexing completeness.
+- The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
+  `07f1441`.
