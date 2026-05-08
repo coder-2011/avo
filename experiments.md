@@ -8019,3 +8019,54 @@ Verification:
 - `uv run --extra dev pytest`: passed, 205 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.40: Recorded env diagnostic guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the must-not-score retry feedback.
+- If the planner chooses a generic no-edit environment stability check, record the result and reject
+  repeats unless there is a concrete environment/build failure.
+- Preserve source and lineage.
+
+Source refresh:
+
+- Exa refreshed SM86/A6000 FlashAttention block-size context before this run. The useful details were
+  that upstream FA2 block-size code uses smaller N tiles for SM8x/head-dim-128 cases and that newer
+  tile-size logic has explicit `sm86_or_89` branches. Sources:
+  https://github.com/Dao-AILab/flash-attention/blob/3387de49/flash_attn/flash_attn_interface.py
+  and https://github.com/Dao-AILab/flash-attention/blob/main/hopper/tile_size.h
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_must_not_score_feedback.json`.
+- The planner chose no-edit mode and ran `avo env`.
+- The diagnostic passed and no source files, score payloads, or lineage entries changed.
+
+Environment result:
+
+- GPU target: NVIDIA RTX A6000, compute capability 8.6, `compute_86/sm_86`.
+- PyTorch: `2.11.0+cu130`, CUDA available, torch CUDA `13.0`.
+- NVCC: local cu13 package nvcc CUDA `13.0`, extension build compatibility `exact`.
+- Baseline build environment: `CUDA_HOME`/`CUDA_PATH` point at the local cu13 package,
+  `FLASH_ATTN_CUDA_ARCHS=80`, `MAX_JOBS=1`, `NVCC_THREADS=1`.
+- Agent environment: Anthropic SDK installed, API key present.
+
+Decision:
+
+- Runtime repo context now states that the current CUDA/build environment is already recorded as
+  stable and that no-edit `avo env` should not be used just to reconfirm stability.
+- Runtime validation now rejects generic environment-stability `avo env` decisions unless the
+  decision cites a concrete recent CUDA/build failure such as a version mismatch, missing compiler,
+  missing package, or extension-build error.
+- Runtime retry feedback explains how to correct that validation error.
+- Runtime knowledge records the environment diagnostic.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 118 tests.
+- `uv run --extra dev pytest`: passed, 208 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
