@@ -3541,3 +3541,55 @@ Tradeoffs and decision:
   bad hunk lengths.
 - The naive seed should remain a correctness reference, not a performance branch. The current
   lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.35: Record invalid constant-only MMA head-dim extension
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the naive baseline and updated patch substrate.
+- Confirm that valid patches can pass application, run the bounded command, and clean up after gate
+  rejection.
+- Capture any concrete CUDA constraint discovered by the attempted patch.
+
+Loop result:
+
+- The agent produced a real `candidate_patch` against `candidates/cuda_mma_attention_seed.py` and
+  `candidates/cuda_mma_attention/attention_kernel.cu`.
+- Patch application succeeded through the guarded `git apply --recount` substrate.
+- The patch only changed `SMOKE_HEAD_DIM` and `kHeadDim` from 16 to 32, then ran:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 32 --total-tokens 32 --num-heads 1 --head-dim 32 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+- Scoring failed correctness because the extension failed to compile for the noncausal case and
+  the causal case still hit the wrapper/runtime head-dim guard.
+- Gate result: rejected with candidate geomean `0.0` versus current best
+  `0.10830947571120902`.
+- Cleanup result: checked reverse patch application succeeded, leaving the runtime worktree clean.
+
+CUDA finding:
+
+- WMMA does not support the attempted fragment shapes:
+  `fragment<matrix_a, 16, 16, 32, ...>`,
+  `fragment<matrix_b, 16, 16, 32, ...>`,
+  `fragment<accumulator, 16, 16, 32, ...>`, and
+  `fragment<accumulator, 16, 32, 16, ...>` were incomplete/unsupported.
+- A head-dimension-32 MMA extension must keep the WMMA K dimension at 16 and explicitly process
+  two 16-wide chunks for QK and PV. Do not repeat the constant-only `kHeadDim=32` patch.
+
+Reliability note:
+
+- This is the first post-hardening loop where a generated patch applied, the bounded score command
+  executed, and rejected patch cleanup succeeded. The patch was wrong, but the orchestration path
+  worked end to end.
+- Runtime commit `3fb4724 docs: record invalid mma head-dim extension` records this in
+  `knowledge/ampere.md`.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `3fb472451aaf6cf027bca082087b9e52054e75cb`.
+
+Tradeoffs and decision:
+
+- The next MMA patch should be a real two-fragment implementation, not a constant change.
+- The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
+  `07f1441`.
