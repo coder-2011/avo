@@ -4063,3 +4063,53 @@ Tradeoffs and decision:
   seq256 warp-row suite.
 - The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
   `cfe5b45`.
+
+## 2026-05-08 - Checkpoint 3.46: Record cp.async pipeline compile guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after discouraging the repeated MMA baseline smoke.
+- Capture whether the agent returns to an edit that can improve the current fixed-case lineage.
+
+Loop result:
+
+- The agent switched back to the warp-row seed and proposed double-buffered `cp.async` K/V staging.
+- The patch applied cleanly, then selected a compile-only check:
+  `uv run --extra cuda python -m avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu --out-dir build/warp_async_check`.
+- Compilation failed before scoring.
+- The relevant compile errors were:
+  - `identifier "__pipeline_commit" is undefined`
+  - `identifier "__pipeline_wait_prior" is undefined`
+- Gate result: no gate decision because no score was produced.
+- Cleanup result: checked reverse patch application succeeded.
+
+CUDA finding:
+
+- The patch used CUDA pipeline intrinsics that are not available in the current candidate compile
+  path without first proving the required include/API contract.
+- Future cp.async attempts should either use a known-good inline PTX helper or the standard CUDA
+  pipeline API with a tiny compile smoke proving the exact include and syntax first.
+- The patch also treated a 16-byte BF16 async copy as if it covered 16 elements. For BF16, 16 bytes
+  covers 8 elements, so vector groups should align on 8-element boundaries.
+- The proposed copy loop mixed scalar fallback writes into the same shared-memory region that an
+  async vector copy could still be writing. Full 16-byte vector groups and scalar tails must be
+  disjoint until the wait/commit protocol is correct.
+
+Knowledge update:
+
+- Runtime commit `d541802 docs: record cpasync pipeline compile guard` records these constraints in
+  `knowledge/ampere.md`.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `d54180241aabb06f3a695dddd519eeae4b0639d7`.
+
+Tradeoffs and decision:
+
+- This was a useful strategic pivot away from repeated MMA baseline diagnostics, but the cp.async
+  implementation still needs a smaller compile-proven primitive before touching the warp-row hot
+  path again.
+- The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
+  `cfe5b45`.
