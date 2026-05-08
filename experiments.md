@@ -1282,3 +1282,82 @@ Tradeoffs and decision:
 - The gate still does not enforce a minimum relative improvement above measurement noise. That is
   a separate policy choice; the current change only prevents clearly invalid score payloads from
   entering lineage.
+
+## 2026-05-08 - Checkpoint 2.9: rejected-attempt memory for agent prompts
+
+Success criteria for this checkpoint:
+
+- Preserve failed and rejected AVO attempts outside committed lineage.
+- Feed recent attempt summaries back into `agent-plan` and `evolve-once` prompts.
+- Keep the committed lineage limited to accepted score payloads.
+- Avoid storing huge stdout/stderr blobs in prompt context.
+- Verify with unit tests and lint.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/evolve.py`.
+- Added `write_step_record(directory, step)`:
+  - writes a timestamped `EvolutionStep` JSON file;
+  - avoids overwriting on timestamp collision by adding a numeric suffix.
+- Added `summarize_attempt_history(directory, limit=5)`:
+  - reads recent `*.json` step records;
+  - skips malformed JSON files;
+  - emits compact lines with command status, gate status, score status, command, and hypothesis;
+  - intentionally excludes long stdout/stderr tails from the summary.
+- Updated `/home/ubuntu/avo-ampere/avo/agent.py`:
+  - `build_variation_prompt` accepts `attempt_history`;
+  - `request_variation_decision` passes it through;
+  - prompts now tell the agent to avoid repeating failed or regressed directions.
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py`:
+  - `agent-plan` and `evolve-once` accept `--attempts-dir` and `--attempt-limit`;
+  - `evolve-once --attempts-dir DIR` reads recent history before planning and writes the new
+    step after finalizing.
+- Updated `/home/ubuntu/avo-ampere/tests/test_agent.py` and
+  `/home/ubuntu/avo-ampere/tests/test_evolve.py`.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md`.
+
+Online and local research notes:
+
+- Exa search on the AVO paper reinforced that unsuccessful intermediate attempts are part of the
+  agent's internal search trajectory, while only successful candidates become committed lineage.
+  This checkpoint adds a durable local equivalent: attempt records outside lineage.
+  Source: https://arxiv.org/html/2603.24517
+- Exa search on Anthropic tool-use docs reinforced the importance of strict tool schemas and
+  high-signal tool results. The attempt summary deliberately reports only stable fields needed for
+  the next decision instead of dumping entire logs into prompt context.
+  Sources:
+  - https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use
+  - https://console.anthropic.com/docs/en/agents-and-tools/tool-use/handle-tool-calls
+- I inspected the local `pi-mono-agent/packages/agent` High-agent implementation for patterns only.
+  The useful pattern was durable, ordered tool result/state handling plus context transformation for
+  pruning/compaction. I did not copy its TypeScript implementation or event loop.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/agent.py avo/cli.py avo/evolve.py tests/test_agent.py tests/test_evolve.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_agent.py tests/test_evolve.py tests/test_cli.py`
+  passed, 35 tests.
+- Full lint:
+  `uv run --extra dev ruff check .`
+  passed.
+- Full unit suite:
+  `uv run --extra dev pytest`
+  passed, 60 tests.
+- CLI parser checks:
+  `uv run python -m avo agent-plan --help` and
+  `uv run python -m avo evolve-once --help`
+  both showed `--attempts-dir` and `--attempt-limit`.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` and `/home/ubuntu/avo` passed.
+
+Tradeoffs and decision:
+
+- This still is not a full edit-evaluate-debug mutation loop. It makes the single-step planner less
+  forgetful by giving it recent rejected attempts, while keeping the actual shell execution surface
+  bounded to existing `avo` commands.
+- The attempt summaries are intentionally lossy. Exact logs remain in JSON files, while prompt
+  context gets only the signal needed to avoid repeated dead ends.
