@@ -340,3 +340,62 @@ Tradeoffs and uncertainty:
   when the lineage is empty and the prompt points it toward upstream FA2. That is acceptable
   for this checkpoint because the executable command is bounded; future prompts should include
   a more precise repo file inventory once the first candidate kernel files exist.
+
+## 2026-05-08 - Checkpoint 1.7: CUDA extension-backed candidate smoke
+
+Success criteria for this checkpoint:
+
+- Add the smallest candidate module that actually builds and invokes custom CUDA code behind
+  the existing `attention(q, k, v, causal)` scorer interface.
+- Ensure the extension build targets A6000/sm_86.
+- Keep the correctness gate unchanged: output must still compare against PyTorch SDPA.
+- Do not claim this is an optimized attention kernel.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/candidates/cuda_identity_seed.py`.
+- Added CUDA extension sources under `/home/ubuntu/avo-ampere/candidates/cuda_identity/`:
+  - `identity.cpp` exposes `identity(tensor)` via pybind.
+  - `identity_kernel.cu` launches a simple CUDA copy kernel supporting BF16/FP16/FP32/FP64
+    dispatch through PyTorch's scalar dispatch macros.
+- `cuda_identity_seed.py` computes attention with PyTorch SDPA, then passes the output through
+  the custom CUDA identity kernel. This proves extension build/load/invocation without moving
+  attention math into the custom kernel yet.
+- Added `ninja` to the `cuda` extra because `torch.utils.cpp_extension.load` requires it.
+- The module sets `TORCH_CUDA_ARCH_LIST=8.6` and `MAX_JOBS=2` by default for controlled local
+  builds.
+
+Online research notes:
+
+- Exa research confirmed PyTorch extension builds can be targeted explicitly with
+  `TORCH_CUDA_ARCH_LIST`, including `8.6`, and that specifying exact compute capabilities is
+  preferable when the target GPU is known.
+  Source: https://docs.pytorch.org/docs/stable/cpp_extension.html
+
+Verification and debugging:
+
+- First extension smoke failed as a structured candidate score because `ninja` was missing.
+  This verified that extension failures stay inside the scorer payload instead of crashing the
+  orchestrator.
+- After adding `ninja`, the next build reached NVCC but failed on a C++ declaration mismatch
+  in `identity.cpp`; fixed by changing the forward declaration to `void identity_cuda(...)`.
+- Clean rebuild command:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_identity_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_identity_seed.py --seq-lens 4096 --causal false --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+- The clean build output showed:
+  `/usr/local/cuda-12.9/bin/nvcc ... -gencode=arch=compute_86,code=sm_86 ... identity_kernel.cu`.
+- Result:
+  - `all_correct`: true.
+  - Non-causal 4096: 10.068 ms, 109.204 TFLOPS.
+  - Geomean: 109.204 TFLOPS.
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 40 passed.
+
+Tradeoffs and uncertainty:
+
+- This is not an evolved attention kernel. It is a CUDA extension-backed correctness and build
+  smoke. The actual AVO kernel work still needs to replace the SDPA call with custom attention
+  math while keeping the same scorer interface and lineage gate.
+- Build output is captured in the isolated worker's stdout tail. For long compiler failures,
+  the 4000-character tail may omit early lines; this was enough for the smoke but may need a
+  larger artifact log during real kernel development.
