@@ -7452,3 +7452,50 @@ Verification:
 - `git diff --check`: passed in the runtime repo.
 - Manual summary check on the live `attempts/` directory now reports only timestamped step records
   and no `<missing command>` placeholders.
+
+## 2026-05-08 - Checkpoint 4.27: 2D probability-stride repeat guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after attempt-history filtering.
+- If the planner repeats a previously rejected probability-buffer skew direction, reject that family
+  more generally at decision validation.
+- Preserve the accepted PV direct-accumulation source and lineage unless a candidate clears
+  correctness and throughput gates.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_attempt_history_filter.json`.
+- The planner proposed probability-buffer stride padding with
+  `kProbabilityStride = kTile + 8`, a 2D
+  `probabilities[kTile][kProbabilityStride]` declaration, and a PV WMMA load from
+  `&probabilities[0][0]`.
+- The patch applied and the score command ran, but the score failed correctness.
+- Cleanup reverse-applied the patch successfully and the lineage did not change.
+
+Failure detail:
+
+- The noncausal case failed during extension build:
+  `expression must be a modifiable lvalue` at
+  `probabilities[row * kTile + key] = __float2bfloat16(0.0f);`.
+- The patch updated the regular probability store to 2D indexing, but left the masked-tile zero-fill
+  branch using stale flattened indexing.
+- The causal case produced a score in the same payload, but the overall score was rejected because
+  `all_correct` was false.
+
+Decision:
+
+- This is still the same simple probability-buffer stride-24 skew direction already recorded as a
+  throughput regression before the accepted PV direct-accumulation patch.
+- Runtime validation now rejects both flat and 2D variants of the stride-24 probability-buffer skew
+  repeat.
+- Runtime knowledge records the post-direct-accum 2D repeat and stale flat-index compile failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 100 tests.
+- `uv run --extra dev pytest`: passed, 190 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
