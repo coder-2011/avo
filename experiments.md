@@ -1058,3 +1058,86 @@ Tradeoffs and uncertainty:
   one-repeat measurements, not a stable architecture conclusion.
 - This still does not use tensor cores or async copy. It establishes a safer place to introduce
   `cp.async` later because the synchronization and boundary behavior are now explicit.
+
+## 2026-05-08 - Checkpoint 2.6: cp.async staging attempt, not retained
+
+Success criteria for this checkpoint:
+
+- Try the smallest Ampere async-copy staging path on the current warp-row seed.
+- Verify whether the compiled binary actually contains async copy instructions.
+- Keep correctness gates authoritative.
+- Do not retain the change if it regresses the tiny development smokes.
+- Record the result so the agent does not rediscover the same dead-end immediately.
+
+Implementation attempted:
+
+- Temporarily updated
+  `/home/ubuntu/avo-ampere/candidates/cuda_warp_rows_attention/attention_kernel.cu`.
+- Added inline PTX helpers for:
+  - `cp.async.cg.shared.global`;
+  - `cp.async.commit_group`;
+  - `cp.async.wait_group 0`.
+- Added a 16-byte async copy path for staged K/V tiles when:
+  - `head_dim <= 64`;
+  - the CTA rows stayed inside one sequence/head;
+  - `head_dim` was aligned to `16 / sizeof(dtype)` elements.
+- Kept the synchronous staging path as fallback.
+
+Outcome:
+
+- The async-copy path compiled and passed correctness.
+- `cuobjdump --dump-sass` on
+  `/home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_warp_rows_attention_seed/avo_cuda_warp_rows_attention_seed.so`
+  showed `LDGSTS.E.BYPASS.128`, `LDGDEPBAR`, and `DEPBAR`, confirming the inline PTX lowered to
+  sm86 async-copy instructions.
+- The 64x64 BF16 smoke regressed versus the synchronous staged version, so I removed the code
+  and left the implementation at checkpoint 2.5 behavior.
+- Updated `/home/ubuntu/avo-ampere/knowledge/ampere.md` with the negative result.
+
+Online research notes:
+
+- Exa research on CUTLASS `copy_sm80.hpp` showed the relevant low-level pattern:
+  `cp.async.*.shared.global`, `cp.async.commit_group`, and `cp.async.wait_group`/`wait_all`.
+  This matched the temporary implementation.
+  Source: https://github.com/NVIDIA/cutlass/blob/main/include/cute/arch/copy_sm80.hpp
+- Exa research on CUTLASS `memory_sm80.h` also showed predicate-guarded and zero-fill variants,
+  which are likely needed for a production boundary-safe path. I avoided adding those here and
+  kept a simpler aligned-only experiment.
+  Source: https://github.com/NVIDIA/cutlass/blob/main/include/cutlass/arch/memory_sm80.h
+
+Verification:
+
+- Clean BF16 async-copy extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_warp_rows_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed while the temporary async code was present.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal BF16: max abs error `0.00390625`, 0.837 ms.
+  - Causal BF16: max abs error `0.015625`, 0.899 ms.
+  - Geomean: `1.3351682505978846e-05` TFLOPS.
+- SASS check:
+  `cuobjdump --dump-sass /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_warp_rows_attention_seed/avo_cuda_warp_rows_attention_seed.so | rg -n "CP_ASYNC|LDGSTS|DEPBAR|cp.async"`
+  passed and found multiple `LDGSTS.E.BYPASS.128` instructions plus dependency barriers.
+- FP32 odd-shape fallback smoke with the temporary async code:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 18 --total-tokens 18 --num-heads 1 --head-dim 18 --dtype fp32 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal FP32: max abs error `4.172325134277344e-07`, 0.803 ms.
+  - Causal FP32: max abs error `4.172325134277344e-07`, 0.857 ms.
+  - Geomean: `1.988299258849849e-05` TFLOPS.
+- BF16 64x64 async-copy smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 64 --total-tokens 64 --num-heads 1 --head-dim 64 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed correctness but regressed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.847 ms.
+  - Causal BF16: max abs error `0.0078125`, 0.806 ms.
+  - Geomean: `0.0008974849432840806` TFLOPS.
+  - Previous synchronous staged checkpoint on the same shape recorded `0.0011906303575200893`
+    TFLOPS geomean.
+
+Tradeoffs and decision:
+
+- The temporary async-copy path did not overlap copy with compute; it only replaced synchronous
+  loads with async instructions followed immediately by wait. The regression is therefore not
+  surprising.
+- I did not keep the code because it worsened the development smoke and increased complexity.
+  A future cp.async attempt should use double-buffering or a pipeline that overlaps K/V tile
+  movement with score/PV work, and should include profiler evidence rather than only timing.
