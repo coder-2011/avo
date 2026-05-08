@@ -456,3 +456,66 @@ Tradeoffs and uncertainty:
 - The agent still tends to propose upstream FA2 files that are not present locally when lineage
   is empty. The next prompt hardening should include a concise repo inventory and current
   candidate paths so the next command moves toward `avo score --backend candidate ...`.
+
+## 2026-05-08 - Checkpoint 1.9: local repo context for agent decisions
+
+Success criteria for this checkpoint:
+
+- Provide the Anthropic planner with concise local repo context instead of only architecture
+  notes and lineage state.
+- Steer the next bounded command toward local candidate scoring when no accepted lineage score
+  exists.
+- Verify that `evolve-once` can now produce a score payload and commit only through the
+  existing lineage gate.
+
+Implementation:
+
+- Added `build_repo_context(root)` in `/home/ubuntu/avo-ampere/avo/agent.py`.
+- The generated context includes:
+  - local candidate modules;
+  - local CUDA candidate sources;
+  - the candidate interface contract;
+  - a preferred first local candidate score command for `candidates/cuda_identity_seed.py`;
+  - an explicit warning not to propose upstream FA2 `csrc/...` paths unless present locally.
+- Added `build_variation_prompt(...)` so prompt construction is testable.
+- Wired repo context into both `agent-plan` and `evolve-once`.
+- Added `--cwd` to `agent-plan` so callers can choose the repo root used for context.
+- Cleaned lineage noise discovered during the live smoke:
+  - avoid re-running `git init` when a lineage repo already exists;
+  - suppress expected `git show HEAD:scores/latest.json` stderr when no accepted score exists.
+
+Online research notes:
+
+- Exa research on Claude Agent SDK context management emphasized being selective with context
+  and tools because tool definitions, prompts, and outputs consume the context window.
+  Source: https://code.claude.com/docs/en/agent-sdk/agent-loop
+- Exa research also noted project context can be supplied through filesystem/project context
+  or directly injected prompts. This checkpoint uses direct prompt context because this scaffold
+  still owns its own Anthropic client loop rather than the Agent SDK.
+  Source: https://code.claude.com/docs/en/agent-sdk/claude-code-features
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 47 passed.
+- Live `agent-plan` with empty temp lineage returned local candidate files and:
+  `next_command: "avo score --backend candidate --candidate candidates/cuda_identity_seed.py --seq-lens 4096 --causal false --repeats 1 --warmup 1 --timeout-s 300"`.
+- Live `evolve-once` with empty temp lineage passed:
+  - ran the bounded candidate score command;
+  - extracted the score payload;
+  - committed through `commit_score`;
+  - gate decision accepted the score.
+- Live score payload:
+  - `all_correct`: true.
+  - Candidate path: `candidates/cuda_identity_seed.py`.
+  - Non-causal 4096: 10.123 ms, 108.617 TFLOPS.
+  - Geomean: 108.617 TFLOPS.
+
+Tradeoffs and uncertainty:
+
+- The prompt is now grounded in local files, but this is still score-first orchestration. It
+  does not yet let the agent edit candidate kernels.
+- The current CUDA candidate still delegates attention math to PyTorch SDPA and only runs an
+  identity CUDA kernel after the fact. The next real implementation step remains moving a small
+  attention computation into the candidate kernel while keeping the scorer and lineage gate
+  unchanged.
