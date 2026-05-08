@@ -7539,3 +7539,38 @@ Verification:
 - `uv run --extra dev pytest`: passed, 191 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.29: Non-improving self-invalid retry feedback
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the incomplete score-skew patch guard.
+- If planning fails before command execution because the decision describes its own patch as unable
+  to improve throughput, keep the fix in retry feedback.
+- Preserve the candidate source and lineage.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_score_skew_guard.json`.
+- The planner failed validation after three attempts.
+- Final validation error: `candidate_patch is described as known invalid by the decision itself;
+  found phrase 'cannot improve throughput'`.
+- No command ran, no patch was applied, no score payload was produced, and the lineage did not
+  change.
+
+Decision:
+
+- The self-invalid validator was correct, but retry feedback did not explicitly name
+  `cannot improve throughput` as a self-invalid patch description.
+- Updated retry feedback so a patch whose own hypothesis, expected effect, or risk says it cannot
+  improve throughput must be replaced with a corrected raw diff or a no-edit diagnostic.
+- Runtime knowledge records the planning failure and retry-feedback adjustment.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 101 tests.
+- `uv run --extra dev pytest`: passed, 191 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
