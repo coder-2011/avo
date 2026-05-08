@@ -5393,3 +5393,30 @@ Verification:
 - `uv run --extra dev pytest`: 150 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.81: WMMA BF16 source refresh
+
+Success criteria for this checkpoint:
+
+- Refresh source-backed WMMA guidance after another invalid warp-row WMMA skeleton.
+- Record constraints that should shape the next tensor-core attempt.
+
+Research result:
+
+- Exa found NVIDIA CUTLASS functionality tables and NVIDIA's `bf16TensorCoreGemm` CUDA sample.
+- CUTLASS documents SM80+ BF16 TensorOp support and lists WMMA 16x16x16 warp-level shapes.
+- CUTLASS also notes that WMMA shared-memory loads expect 128-bit alignment.
+- NVIDIA's BF16 sample stages A/B tiles through shared memory, uses 16-byte vectorized copies,
+  adds BF16 skew/padding, and uses explicit `__nv_bfloat16` WMMA fragments.
+
+Decision:
+
+- Future warp-row WMMA work should avoid dead direct-global-load skeletons and early returns.
+- A useful compile step should first build an aligned shared-memory tile path that can later feed
+  the existing online-softmax score path.
+- WMMA patches should preserve the scalar path until the tensor-core score tile is fully integrated
+  and scoreable.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
