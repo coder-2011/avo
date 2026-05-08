@@ -4391,6 +4391,7 @@ Decision:
 Verification:
 
 - Runtime knowledge update passed `git diff --check`.
+
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `55499823850b22dda2061672d14d5238b0e21a7f`.
 
@@ -5128,3 +5129,44 @@ Decision:
 Verification:
 
 - Runtime knowledge update passed `git diff --check`.
+
+## 2026-05-08 - Checkpoint 3.74: MMA pipeline skeleton compile failure guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the CuTe online-softmax source refresh.
+- Capture whether the agent can move away from repeated tiled no-patch attempts.
+- Prevent repeat MMA pipeline patches with known invalid CUDA pipeline patterns.
+
+Loop result:
+
+- The agent proposed an MMA double-buffered async-copy skeleton for
+  `candidates/cuda_mma_attention/attention_kernel.cu`.
+- The patch applied, then `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/mma_double_buffer_skeleton` failed.
+- Cleanup reverse-applied the patch successfully.
+
+Compile failure:
+
+- `__pipeline_wait_prior<1>()` failed because the local public CUDA primitive is
+  `__pipeline_wait_prior(prior)`, not the templated spelling.
+- The patch accidentally removed the opening `wmma::fragment<wmma::matrix_a, ...>` declaration line,
+  leaving stray template arguments and an undefined `q_frag`.
+- The patch also used scalar BF16 `__pipeline_memcpy_async(..., sizeof(__nv_bfloat16))` copies even
+  though prior knowledge requires 16-byte aligned groups for useful Ampere async copies.
+
+Runtime change:
+
+- Planner validation now rejects candidate patches that add templated
+  `__pipeline_wait_prior<...>`.
+- Planner validation now rejects scalar BF16 `__pipeline_memcpy_async` additions and asks for
+  16-byte aligned groups.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 56 passed.
+- `uv run --extra dev pytest`: 145 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
+  `0aef1f375f481162c8262ec9b9d84e2c47b57f8c`.
