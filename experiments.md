@@ -975,3 +975,86 @@ Tradeoffs and uncertainty:
   address the main missing pieces: tensor-core QK/PV, shared-memory staging, and async copies.
 - The speed deltas are one-repeat tiny-shape development signals. They are useful for steering
   the next edit, but not strong enough to claim stable performance improvement.
+
+## 2026-05-08 - Checkpoint 2.5: gated shared K/V staging in the warp-row seed
+
+Success criteria for this checkpoint:
+
+- Add shared-memory K/V tile staging to the current warp-row seed without changing the candidate
+  interface.
+- Avoid deadlocks with causal rows that have different K limits inside one CTA.
+- Preserve a global-memory fallback for boundary CTAs and larger head dimensions.
+- Keep correctness against PyTorch SDPA for BF16 and FP32.
+- Keep dispatch limited to the scorer-supported dtypes after shared-memory growth.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/candidates/cuda_warp_rows_attention/attention_kernel.cu`.
+- Added per-CTA shared K and V tiles:
+  - `k_tiles[32][128]`;
+  - `v_tiles[32][128]`.
+- Shared staging is enabled only when:
+  - `head_dim <= 64`;
+  - the CTA's four query rows stay inside the same sequence/head boundary.
+- Head dimension 128 and boundary CTAs keep the previous global packed path.
+- The shared path uses a block-wide K loop limit so every warp participates in `__syncthreads()`,
+  even when causal masking means some rows have no valid keys in later tiles.
+- Restricted CUDA dispatch to fp32, fp16, and bf16.
+
+Important failure and fix:
+
+- The first clean build failed because the old `AT_DISPATCH_FLOATING_TYPES_AND2` instantiated a
+  double-precision kernel. With static shared K/V tiles, the double instantiation requested
+  `0x10200` bytes of shared memory, above the default `0xc000` per-block limit.
+- The scorer CLI only supports `bf16`, `fp16`, and `fp32`, so I replaced the broad dispatch macro
+  with an explicit switch for those dtypes.
+
+Online research notes:
+
+- Exa research on NVIDIA's FlashAttention CUDA Tile post reinforced that the real FlashAttention
+  direction is tiled K/V streaming through on-chip memory, online softmax state, and fused
+  compute. This checkpoint implements only the K/V staging portion in the scalar seed.
+  Source: https://developer.nvidia.com/blog/tuning-flash-attention-for-peak-performance-in-nvidia-cuda-tile/
+- Exa research on line-by-line FlashAttention walkthroughs showed the common shared-memory
+  partitioning pattern for `Qi`, `Kj`, `Vj`, scores, and running softmax state. I kept this
+  checkpoint narrower by staging only K/V, leaving Q and O in registers/global reads.
+  Source: https://www.stephendiehl.com/posts/flash_attention/
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 52 passed.
+- Clean BF16 shared-path extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_warp_rows_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal BF16: max abs error `0.00390625`, 0.901 ms.
+  - Causal BF16: max abs error `0.015625`, 0.868 ms.
+  - Geomean: `1.3096654099117944e-05` TFLOPS.
+- FP32 odd-shape fallback smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 18 --total-tokens 18 --num-heads 1 --head-dim 18 --dtype fp32 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal FP32: max abs error `4.172325134277344e-07`, 0.925 ms.
+  - Causal FP32: max abs error `4.172325134277344e-07`, 0.696 ms.
+  - Geomean: `2.055352117728248e-05` TFLOPS.
+- BF16 64x64 shared-path smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 64 --total-tokens 64 --num-heads 1 --head-dim 64 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.689 ms.
+  - Causal BF16: max abs error `0.0078125`, 0.562 ms.
+  - Geomean: `0.0011906303575200893` TFLOPS.
+- BF16 128x128 global-path smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 128 --total-tokens 128 --num-heads 1 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.719 ms.
+  - Causal BF16: max abs error `0.0078125`, 0.547 ms.
+  - Geomean: `0.009460695342707354` TFLOPS.
+
+Tradeoffs and uncertainty:
+
+- Shared K/V staging helped the 64x64 smoke in this run but regressed 128x128 before gating, so
+  the implementation now stages only `head_dim <= 64`. This is a heuristic based on tiny
+  one-repeat measurements, not a stable architecture conclusion.
+- This still does not use tensor cores or async copy. It establishes a safer place to introduce
+  `cp.async` later because the synchronization and boundary behavior are now explicit.
