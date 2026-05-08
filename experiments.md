@@ -8872,3 +8872,52 @@ Verification:
 - `uv run --extra dev pytest`: passed, 256 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.56: Bounded loop accepts seq8192 MMA lane
+
+Success criteria for this checkpoint:
+
+- Continue the shape-graduation path from the accepted seq4096 lane toward the remaining long target
+  shapes.
+- Preserve any accepted seq8192 source state and update validation constants, tests, README, and
+  knowledge notes.
+- Keep correctness and timing evidence attached to the accepted lane.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_seq4096_lane.json --timeout-s 900 --env-file ../avo/.env.local`
+- Step 1: planner emitted a structured seq8192 cap batch (`kMaxSeqLen=8192`, add `8192` to
+  `SMOKE_SEQUENCES`) and compile-checked it. Compile passed with no spills, 40 registers, 1 barrier,
+  and 9920 bytes shared memory.
+- Step 2: planner reused the pending transform JSON and scored the seq8192 lane. Correctness passed
+  and the suite-aware gate accepted a new benchmark lane.
+
+Accepted seq8192 lane:
+
+- Nested lineage commit: `b6622ab` (`evolve: accept candidate`).
+- Workload: `seq_len=8192`, `total_tokens=32768`, `num_heads=16`, `head_dim=128`, BF16, both causal
+  modes, `trials=3`, `warmup=1`, `repeats=1`.
+- Noncausal: max error `0.0009765625`, median `211.3244171142578 ms`,
+  `10.405911846727314` TFLOPS, timing CV `0.002891365967579352`.
+- Causal: max error `0.0078125`, median `210.7821502685547 ms`,
+  `5.216341262175792` TFLOPS, timing CV `0.0013814822341183689`.
+- Geomean: `7.367549615485977` TFLOPS.
+- Gate decision: accepted with reason `candidate established benchmark case set`.
+
+Decision:
+
+- Runtime source now carries `kMaxSeqLen=8192` and wrapper
+  `SMOKE_SEQUENCES={16, 32, 64, 128, 256, 1024, 2048, 4096, 8192}`.
+- Agent-side current MMA base sequences now include 8192, no-edit MMA scores below seq8192 are
+  treated as below the accepted validation lane, and the exact seq8192 no-edit score is recorded.
+- README and knowledge notes now describe seq8192 as the current accepted MMA lane.
+- This is correctness and lane-establishment progress; it still does not satisfy the final
+  objective of beating FlashAttention-2 on the target suite.
+
+Verification:
+
+- The loop itself compiled and scored the accepted candidate successfully on A6000/sm86.
+- `uv run --extra dev pytest`: passed, 256 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
