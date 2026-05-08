@@ -292,3 +292,51 @@ Tradeoffs and uncertainty:
 - The next candidate-kernel checkpoint should add the smallest CUDA extension-backed candidate
   behind this interface and verify that the extension builds for `sm_86` without weakening
   the correctness gate.
+
+## 2026-05-08 - Checkpoint 1.6: live Anthropic agent-plan smoke
+
+Success criteria for this checkpoint:
+
+- Exercise the real Anthropic `agent-plan` path with `ANTHROPIC_API_KEY` from
+  `/home/ubuntu/avo/.env.local`.
+- Verify strict tool-use compatibility with the default model.
+- Ensure `next_command` is locally bounded to commands the `run-decision` executor can
+  actually run.
+- Preserve fallbacks for models or SDKs that reject strict tools or structured outputs.
+
+What happened:
+
+- First smoke attempt used the previous default model, `claude-sonnet-4-20250514`.
+  Anthropic returned a 400 error: that model does not support strict tools.
+- Exa research confirmed structured outputs/strict tool use are generally available on
+  Claude Sonnet 4.5 and newer supported models, and Anthropic release notes identify
+  `claude-sonnet-4-5-20250929` as the Sonnet 4.5 model ID.
+  Source: https://docs.anthropic.com/en/release-notes/api
+  Source: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+- Updated the default AVO agent model to `claude-sonnet-4-5-20250929`.
+- Added API fallback handling:
+  - strict tool request -> JSON structured output -> plain JSON text,
+  - but only for recognized unsupported-feature errors.
+- Added local validation that `next_command` must:
+  - start with `avo`;
+  - use only `env`, `compile`, or `score`;
+  - avoid shell control tokens such as `&&`, pipes, and redirection.
+- Added schema descriptions and prompt text telling the model not to emit arbitrary shell,
+  `cat`, `head`, `git`, or destructive commands.
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 40 passed.
+- Live command:
+  `uv run --extra agent python -m avo agent-plan --lineage /tmp/avo-agent-smoke-lineage --knowledge knowledge/ampere.md --env-file /home/ubuntu/avo/.env.local`
+  passed.
+- The live response returned a validated bounded command:
+  `next_command: "avo env"`.
+
+Tradeoffs and uncertainty:
+
+- The agent can still propose file-inspection paths that are not present in `avo-ampere`
+  when the lineage is empty and the prompt points it toward upstream FA2. That is acceptable
+  for this checkpoint because the executable command is bounded; future prompts should include
+  a more precise repo file inventory once the first candidate kernel files exist.
