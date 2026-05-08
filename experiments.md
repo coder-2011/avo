@@ -4843,3 +4843,43 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `1512a872dc62a6a9adca70bba64ee421d954901f`.
+
+## 2026-05-08 - Checkpoint 3.66: Self-invalid patch guard and tiled rescale rejection
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the MMA unroll compile-only result.
+- Prevent decisions from executing when their own risk text says the patch is known invalid.
+
+Loop result:
+
+- The agent proposed a tiled online-softmax rescale patch.
+- The patch was rejected by `git apply --check` because the context did not match the current tiled
+  source.
+- The decision's own risk text also said the patch left a stale `tile_scale` reference and would
+  cause a compile error.
+- No patch was applied, no cleanup was required, and no lineage gate decision was made.
+
+Runtime change:
+
+- Planner validation now rejects non-empty candidate patches whose decision text describes the patch
+  as known invalid, currently including phrases such as `not ready to apply` or
+  `will cause a compile error`.
+- Added a regression test for a self-rejected tiled patch decision.
+
+Tiled-kernel note:
+
+- The correct online-softmax accumulation invariant remains:
+  `output_acc = output_acc * old_scale + tile_acc * tile_scale`.
+- `row_sum` must update as `row_sum = row_sum * old_scale + tile_sum * tile_scale`.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 52 passed.
+- `uv run --extra dev pytest`: 141 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
+  `e78006143ec9388195b66d1db4511021b4770492`.
+- Runtime push/fetch verification after knowledge update: local `main` and `origin/main` both
+  resolved to `76e3aa7d75cef6086a3f70cdf2460b706cdeb8d7`.
