@@ -3425,3 +3425,47 @@ Tradeoffs and decision:
   it is not a viable no-patch branch for the current 128-token smoke workload.
 - The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
   `07f1441`.
+
+## 2026-05-08 - Checkpoint 3.33: Clarify invalid patch retry feedback
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after capping unpatched tiled seed scores.
+- If the agent again describes a code change without supplying a raw patch, make the retry feedback
+  explicit enough to distinguish patching from no-edit diagnostics.
+
+Loop result before the fix:
+
+- The loop failed during decision validation before executing a command or creating a lineage
+  commit.
+- Validation rejected the decision because `candidate_edit` described a code change while
+  `candidate_patch` was empty.
+- The previous retry prompt reported the validation error, but did not spell out the exact raw
+  unified-diff requirement or the valid no-edit alternative.
+
+Reliability fix:
+
+- Runtime commit `bcb7b74 fix: clarify invalid patch retry feedback` adds targeted retry guidance
+  for this validation error.
+- If the next step changes code, the retry prompt now says `candidate_patch` must be a raw unified
+  diff starting with `diff --git`.
+- If no code changes are needed, it tells the agent to make `candidate_edit` say `No edit; ...`
+  and describe only the bounded score, compile, or environment diagnostic.
+
+Verification:
+
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 131 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `bcb7b7465fb96cda88200718afd2d5a1fbc14408`.
+
+Tradeoffs and decision:
+
+- This does not loosen validation. It keeps the raw-patch gate intact and makes the correction path
+  more concrete for Anthropic retries.
+- The current lineage best remains `0.10830947571120902` geomean TFLOPS on nested lineage commit
+  `07f1441`.
