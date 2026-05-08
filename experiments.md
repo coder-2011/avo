@@ -3314,3 +3314,48 @@ Tradeoffs and decision:
 - The tiled compile result is useful context but does not prove correctness or performance.
 - Future tiled work should run a bounded candidate score or provide a real candidate patch rather
   than repeating a no-patch compile diagnostic.
+
+## 2026-05-08 - Checkpoint 3.31: Normalize repeated compile attempts
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the tiled ptxas baseline.
+- If the agent repeats the same compile diagnostic with only a different `--out-dir`, make that
+  repeat visible to the supervisor.
+
+Loop result before the fix:
+
+- The agent repeated the tiled seed compile under a new output directory:
+  `build/tiled_baseline_verify` instead of `build/tiled_baseline_check`.
+- The compile succeeded and produced the same ptxas pattern: BF16/Half/FP32 entry points at
+  40 registers and 1 barrier with no spills, and the double entry point at 48 registers.
+- No score was run and no candidate patch was applied, so no lineage commit was created.
+- The existing repeated-attempt fingerprint included the full `next_command`, so changing
+  `--out-dir` made equivalent compile diagnostics look different.
+
+Reliability fix:
+
+- Runtime commit `74310e1 fix: normalize repeated compile attempts` fingerprints `avo compile`
+  attempts by `--source` instead of the full command string.
+- Repeating the same compile source with different throwaway build directories now triggers the
+  repeated-unaccepted supervisor signal.
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/evolve.py tests/test_evolve.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_evolve.py` passed, 33 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 127 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `74310e1db24321237734f91e0e0062b1cc62be77`.
+
+Tradeoffs and decision:
+
+- This does not reject compile diagnostics outright. It makes repeated no-lineage compile work
+  more visible in attempt history, so the next prompt can push toward scoring or patching.
