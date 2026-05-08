@@ -4576,3 +4576,39 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `3316106482b916818a6dc8b42eb564c1625f1afe`.
+
+## 2026-05-08 - Checkpoint 3.58: Rejected patch cleanup verification
+
+Success criteria for this checkpoint:
+
+- Close the reliability gap observed after a rejected compile attempt left a stray candidate source
+  edit despite cleanup reporting success.
+- Preserve the existing non-destructive cleanup model: reverse the candidate patch, verify, but do
+  not force-reset user or agent changes.
+
+Runtime change:
+
+- Added a post-cleanup verification step for rejected candidate patches.
+- After `git apply --reverse` succeeds, the runtime now checks the candidate patch paths with
+  `git status --porcelain --untracked-files=all`.
+- If any affected patch path remains dirty, cleanup is recorded as failed with
+  `candidate patch cleanup left paths dirty`.
+- Non-Git temporary test directories keep the old behavior because there is no `HEAD` to compare
+  against.
+
+Regression test:
+
+- Added a Git-backed test where reverse-apply succeeds but command-side residue remains in the
+  patched candidate file.
+- The cleanup result is now marked failed, and the loop control path can stop on
+  `cleanup_failed` instead of silently continuing from a contaminated source tree.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_evolve.py -q`: 35 passed.
+- `uv run --extra dev pytest tests/test_cli.py -q`: 21 passed.
+- `uv run --extra dev pytest`: 139 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `6e160162f6a27c9d57092b4c679686ce4a8e9826`.
