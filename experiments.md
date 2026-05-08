@@ -6374,3 +6374,53 @@ Decision:
 - This is the first correctness-proven MMA smoke source that beat the previous seq256/head_dim128
   lineage best. It improves noncausal throughput materially and keeps causal throughput above the
   prior best case, but it is still a small smoke kernel rather than an FA2-level implementation.
+
+## 2026-05-08 - Checkpoint 4.03: MMA K-staging compile-only probe
+
+Success criteria for this checkpoint:
+
+- Refresh Ampere attention-kernel references after the accepted seq256 MMA checkpoint.
+- Run one bounded Anthropic loop from the current lineage.
+- Record whether the next structural K/V staging step compiles, scores, or should be avoided as a
+  repeated compile-only probe.
+- Clean up any transient agent patch and keep local attempt records out of the committed runtime
+  tree.
+
+Source refresh:
+
+- Exa found NVIDIA's CUTLASS CuTeDSL Ampere FlashAttention v2 example as the most relevant primary
+  reference for the next direction: it uses `cp.async`, Ampere tensor-core MMA, register pipelining,
+  shared-memory swizzles, online softmax, and output rescaling.
+- Exa also found a LeetCUDA Ampere-style MMA attention kernel that uses a 64x64-ish warp-tiled
+  structure, shared Q/K/V tiles, warp-level online softmax reductions, register reuse for P/V, and
+  optional multi-stage K/V prefetching. It is useful as search-space evidence, not as code to copy.
+
+Loop result:
+
+- The agent proposed a conservative synchronous K-staging substrate for the current
+  `cuda_mma_attention` seed.
+- The patch added `__shared__ __nv_bfloat16 k_shared[kTile * kHeadDim]`, loaded the full 16x128 K
+  tile cooperatively with all 256 threads, and used shared memory only for QK chunk 0.
+- The other seven QK chunks and all eight PV chunks remained on the existing global-load path.
+- The bounded command was compile-only:
+  `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/mma_k_staging_chunk0`.
+
+Verification:
+
+- Compile passed on sm86 with no spills, 40 registers, 1 barrier, 22208 bytes shared memory,
+  400 bytes `cmem[0]`, 224 bytes `cmem[4]`, 8 bytes `cmem[2]`, and 28 bytes global memory.
+- The orchestrator cleaned up the transient candidate patch successfully.
+- No score was run and no lineage gate decision was made.
+
+Decision:
+
+- Do not preserve the single-chunk staging patch as runtime code. It is only a compile proof for a
+  shared-memory staging substrate and would add cooperative-load overhead while still leaving most
+  QK/PV loads global.
+- The agent's expected-effect text understated the shared-memory increase: a 16x128 BF16 K tile is
+  4096 bytes, which matches the jump from 18112 to 22208 bytes.
+- Runtime `.gitignore` now ignores `attempts/`, matching the design that attempt history is local
+  cross-step memory rather than committed lineage.
+- The next K/V staging step should either stage all QK chunks and score, or compile-check a clearly
+  different `cp.async`/double-buffered path before scoring.
