@@ -4682,3 +4682,37 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `57dbb4bafe90c60c8d261a49649a684c777ca601`.
+
+## 2026-05-08 - Checkpoint 3.61: Internal-32 MMA compile failure
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the two-chunk MMA compile-shape proof.
+- Capture whether a widened internal 16x32 MMA buffer patch compiles.
+
+Loop result:
+
+- The agent proposed an internal-32 MMA patch that widened `pv_tile` and `output_acc`, while keeping
+  the wrapper at `kHeadDim == 16`.
+- The patch applied and cleanup reverted it cleanly afterward.
+- Compile failed with return code 2.
+
+Compile failure:
+
+- NVCC reported undefined identifiers in the QK block:
+  `score_frag`, `q_frag`, and `k_frag`.
+- The patch introduced `score_frag_0` and `score_frag_1` plus chunk-local Q/K fragments, but left the
+  original single-fragment fill/load/mma lines in place after the new chunk loop.
+
+Decision:
+
+- This confirms the correct next repair is surgical: remove the stale single-fragment QK block after
+  introducing the two-chunk loop, then store the accumulated two-chunk score fragment.
+- Continue compile-first for this MMA direction; do not score until the widened buffers, row stride,
+  QK accumulation, PV chunk stores, and wrapper shape are all consistent.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `2217621afd7ff27e54037532c4545852239f7b70`.
