@@ -7708,3 +7708,39 @@ Verification:
 - `uv run --extra dev pytest`: passed, 194 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.33: Missing decision-key retry feedback
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the Q-fragment preload guard.
+- If planning fails before command execution because the agent returns a partial structured
+  decision, keep the fix in retry feedback.
+- Preserve the candidate source and lineage.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_q_preload_guard_final.json`.
+- The planner failed validation after three attempts.
+- Final validation error: `variation decision missing required keys: expected_effect, risk,
+  next_command`.
+- No command ran, no patch was applied, no score payload was produced, and the lineage did not
+  change.
+
+Decision:
+
+- Added targeted retry feedback telling the planner to return one complete variation decision object
+  with every required field: `hypothesis`, `files_to_inspect`, `candidate_edit`, `candidate_patch`,
+  `expected_effect`, `risk`, and `next_command`.
+- The feedback explicitly says not to omit `expected_effect`, `risk`, or `next_command` even in
+  no-edit diagnostic mode.
+- Runtime knowledge records the partial-decision planning failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 105 tests.
+- `uv run --extra dev pytest`: passed, 195 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
