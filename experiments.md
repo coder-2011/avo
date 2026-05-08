@@ -4113,3 +4113,41 @@ Tradeoffs and decision:
   path again.
 - The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
   `cfe5b45`.
+
+## 2026-05-08 - Checkpoint 3.47: Record CUDA pipeline primitive include
+
+Success criteria for this checkpoint:
+
+- Refresh Ampere `cp.async` source context after the failed `__pipeline_*` compile.
+- Record the concrete include/API path that can make the next cp.async attempt compile.
+
+Research result:
+
+- Exa search found NVIDIA's CUDA Programming Guide asynchronous-copy section and PTX ISA docs as
+  the relevant primary references for global-to-shared async copies.
+- Local CUDA 13 headers under the Python-provided CUDA root contain the immediately actionable
+  candidate compile contract.
+- `cuda_pipeline_primitives.h` declares `__pipeline_memcpy_async`, `__pipeline_commit`, and
+  `__pipeline_wait_prior`.
+- The helper routes 16-byte async copies to `cp.async.cg.shared.global`, supports source-size /
+  zero-fill handling for partial copies, and checks shared/global address spaces plus 4/8/16-byte
+  alignment.
+
+Knowledge update:
+
+- Runtime commit `dd50425 docs: record cuda pipeline primitive include` records that future cp.async
+  attempts can first add `#include <cuda_pipeline_primitives.h>` and compile a tiny candidate-local
+  smoke before restructuring the warp-row loop.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `dd50425b1745ae8a06f732774cc15ad24899448d`.
+
+Tradeoffs and decision:
+
+- This does not make the failed warp-row patch correct; it only removes the immediate undefined
+  intrinsic blocker for a future, smaller cp.async smoke.
+- The 8-BF16-elements-per-16-byte-copy and disjoint scalar-tail constraints from Checkpoint 3.46
+  still apply.
