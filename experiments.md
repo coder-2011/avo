@@ -6973,3 +6973,47 @@ Verification:
 - `uv run --extra dev pytest`: passed, 177 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.16: Thread-local row-state correctness guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the scalar async-copy cooldown prompt.
+- If the planner produces a non-async structural patch, let the existing score/correctness gate
+  decide it.
+- Record and guard any correctness-breaking pattern that makes it through patch validation.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_scalar_async_cooldown.json`.
+- The planner produced a non-async patch that moved MMA row softmax state from shared memory into
+  per-thread register arrays.
+- The patch applied and the candidate score command ran.
+- Cleanup reverse-applied the patch successfully after rejection.
+- The lineage did not change.
+
+Score result:
+
+- Both noncausal and causal cases failed correctness.
+- Error for both cases: `RuntimeError: candidate output contains non-finite values`.
+- Candidate geomean was `0.0` TFLOPS.
+- Gate decision: rejected because the candidate failed correctness.
+
+Decision:
+
+- The patch's row-state ownership was wrong. It computed `reg_idx` from the row owner in one loop,
+  then later used `row / blockDim.x` from unrelated output-scaling and final-store threads, so those
+  threads read uninitialized per-thread row state.
+- Runtime validation now rejects patches that move MMA row state into per-thread registers and then
+  consume that state from cross-thread row loops.
+- Runtime knowledge records the correctness failure and ownership constraint for any future
+  register-row-state attempt.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 89 tests.
+- `uv run --extra dev pytest`: passed, 178 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
