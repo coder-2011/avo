@@ -2181,3 +2181,74 @@ Tradeoffs and decision:
 - The fingerprint is intentionally coarse. It catches exact repeated command/edit surfaces and a
   short no-acceptance tail; it will not detect semantically equivalent rewrites with different patch
   text.
+
+## 2026-05-08 - Checkpoint 3.12: benchmark provenance metadata
+
+Success criteria for this checkpoint:
+
+- Make accepted score payloads more auditable without changing the scoring function or gate.
+- Record benchmark settings that affect timing: warmup, repeats, trials, seed, and case count.
+- Record the intended A6000/sm86 target alongside observed non-secret environment metadata.
+- Keep metadata collection safe in CPU-only unit tests and CUDA score runs.
+- Verify the metadata on the actual A6000 path with a tiny GPU score smoke.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/benchmark.py`:
+  - added `benchmark_metadata(...)`;
+  - every `score_backend(...)` summary now includes a top-level `benchmark` block;
+  - metadata records `measured_at`, warmup/repeats/trials/seed/case count, target
+    `NVIDIA RTX A6000` / `sm_86` / gencode, Python/platform, PyTorch version, PyTorch CUDA
+    version, CUDA availability, and visible GPU properties when CUDA is available.
+- Updated `/home/ubuntu/avo-ampere/tests/test_benchmark_math.py` and
+  `/home/ubuntu/avo-ampere/tests/test_candidate_backend.py` for the new metadata block.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md` so humans and the agent know score payloads now
+  carry timing provenance.
+
+Online research notes:
+
+- Exa found PyTorch benchmark utility guidance explaining that benchmark measurements are
+  represented by serializable `Measurement` objects and grouped/interpreted by metadata. This
+  supports storing settings and environment context in AVO score payloads, not only raw numbers.
+  Source: https://github.com/pytorch/pytorch/blob/main/torch/utils/benchmark/README.md
+- Exa found PyTorch benchmark docs emphasizing CUDA synchronization, warmups, replicates, and
+  robust median computation. This matches AVO's current timing samples and motivates recording
+  the timing settings that produced them.
+  Source: https://docs.pytorch.org/docs/2.3/benchmark_utils.html
+- Exa found TorchTitan benchmark submission guidance requesting hardware setup, actual performance
+  reports with command/config details, dependency versions, and date/time. This supports adding
+  target, environment, settings, and timestamp metadata to each score summary.
+  Source: https://github.com/pytorch/torchtitan/blob/26181968/benchmarks/README.md
+- Exa found PyTorch benchmark notes about benchmarking noise from interrupts, context switches,
+  and clock frequency scaling. AVO does not eliminate those effects yet, but recording environment
+  and replicate statistics keeps comparisons more inspectable.
+  Source: https://github.com/pytorch/benchmark/blob/main/README.md
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/benchmark.py tests/test_benchmark_math.py tests/test_candidate_backend.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_benchmark_math.py tests/test_candidate_backend.py`
+  passed, 10 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 95 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+- A6000 GPU smoke:
+  `uv run --extra cuda python -m avo score --backend torch-sdpa --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal false --repeats 1 --warmup 1 --timeout-s 120`
+  passed and the parsed payload reported `all_correct=true`, `sm=sm_86`,
+  `gpu="NVIDIA RTX A6000"`, `torch_cuda="13.0"`, and `repeats=1`.
+
+Tradeoffs and decision:
+
+- The metadata is descriptive, not a benchmark-noise control mechanism. It does not pin clocks,
+  record driver version, or enforce exclusive GPU access.
+- The timestamp makes score payloads non-deterministic by design; lineage commits are already
+  run-specific artifacts, and the audit value is worth it.
+- This checkpoint improves reproducibility of future accepted score commits but does not itself
+  improve kernel throughput.
