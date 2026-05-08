@@ -8345,3 +8345,45 @@ Verification:
 - `uv run --extra dev pytest`: passed, 222 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.47: Raw CUDA patch channel closed
+
+Success criteria for this checkpoint:
+
+- Run a live loop after transform-aware score-repeat feedback.
+- If the planner still uses a raw CUDA diff for kernel evolution, close that interface path and keep
+  raw diffs only for non-CUDA candidate files.
+- Record the score result if the patch is executable.
+
+Live loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_transform_score_feedback.json`.
+- The planner produced a valid legacy raw diff against
+  `candidates/cuda_warp_rows_attention/attention_kernel.cu`.
+- The patch removed shared `v_tiles` staging and loaded V directly from global memory in the
+  warp-row PV accumulation loop.
+- The score passed correctness but gate-rejected throughput:
+  geomean `0.40530677363112055` TFLOPS versus best `0.5772885607891738`.
+- Noncausal: max error `0.001953125`, median `0.9009280204772949 ms`,
+  `0.5959087738391973` TFLOPS.
+- Causal: max error `0.015625`, median `0.9737600088119507 ms`,
+  `0.27566900834992025` TFLOPS.
+- Cleanup reverse-applied the patch successfully and lineage stayed unchanged.
+
+Decision:
+
+- Runtime validation now rejects raw `candidate_patch` edits to `.cu` and `.cuh` files after
+  existing domain-specific preflights run.
+- CUDA kernel edits must use `candidate_transform`, which is materialized and checked by the
+  orchestrator. Raw diffs remain available for non-CUDA candidate files such as Python wrappers.
+- Retry feedback and prompt/context text now explain that raw CUDA patches are not an allowed edit
+  channel.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 130 tests.
+- `uv run --extra dev pytest`: passed, 224 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
