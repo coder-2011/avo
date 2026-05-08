@@ -5928,3 +5928,53 @@ Decision:
 
 - This is structural correctness progress, not a lineage improvement. The workload signature is
   seq32/head_dim32 and is not comparable to the current seq256/head_dim128 warp-row best.
+
+## 2026-05-08 - Checkpoint 3.95: BF16 score_tiles regression guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the committed MMA head_dim32 proof.
+- Record the next warp-row attempt and its gate decision.
+- Add a narrow guard for the exact regressed patch pattern if the attempt is not useful to repeat.
+
+Loop result:
+
+- The agent proposed converting the warp-row shared `score_tiles` buffer from FP32 to BF16.
+- The patch changed `__shared__ float score_tiles[kRowsPerBlock][kTileKeys]` to
+  `__shared__ __nv_bfloat16 score_tiles[kRowsPerBlock][kTileKeys]`, changed the local `scores`
+  pointer to BF16, stored shifted probabilities through `__float2bfloat16`, and converted them
+  back with `__bfloat162float` during V accumulation.
+- The patch applied and scored successfully, then the lineage gate rejected it for throughput
+  regression. Cleanup reverse-applied the patch successfully, so no source change leaked into the
+  worktree.
+
+Score result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --attempts-dir benchmarks/attempts --loop-json
+  benchmarks/latest-loop.json --max-steps 1 --timeout-s 300 --env-file ../avo/.env.local`.
+- Candidate score command: `avo score --backend candidate --candidate
+  candidates/cuda_warp_rows_attention_seed.py --seq-lens 256 --total-tokens 1024 --num-heads 4
+  --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`.
+- All correctness checks passed.
+- Noncausal: max_abs_error `0.001953125`, median `1.2097599506378174 ms`,
+  `0.44378300977557367` TFLOPS, samples
+  `[1.3521599769592285, 1.2097599506378174, 1.1501760482788086]`.
+- Causal: max_abs_error `0.00390625`, median `0.937279999256134 ms`,
+  `0.28639836144273007` TFLOPS, samples
+  `[0.8016960024833679, 0.937279999256134, 1.0807360410690308]`.
+- Geomean: `0.3565090838055145` TFLOPS.
+- Gate decision: rejected versus best geomean `0.43185073056556733` because the candidate
+  regressed throughput.
+
+Runtime change:
+
+- Planner validation now rejects the exact warp-row BF16 `score_tiles` conversion pattern.
+- The repo context prompt also tells agents not to repeat that buffer-precision change.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 73 passed.
+- `uv run --extra dev pytest`: 162 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
