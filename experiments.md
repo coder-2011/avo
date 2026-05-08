@@ -5585,3 +5585,43 @@ Decision:
 Verification:
 
 - Runtime knowledge update passed `git diff --check`.
+
+## 2026-05-08 - Checkpoint 3.86: Dynamic K/V migration score regression guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the dynamic K/V flat-buffer compile proof.
+- Score the dynamic K/V migration before adding `cp.async` or double buffering.
+- Prevent repeating the dynamic-shared migration if it regresses as a standalone change.
+
+Loop result:
+
+- The agent proposed applying and scoring the dynamic K/V shared-memory migration.
+- The patch moved K/V tiles into flat `extern __shared__` buffers, converted K/V accesses to flat
+  offset indexing, passed a dynamic shared-memory byte count at launch, and attempted a dynamic
+  shared-memory attribute when needed.
+- The patch applied and scored the existing seq256/head_dim128 BF16 warp-row suite.
+- The candidate passed correctness but regressed geomean throughput.
+- Cleanup reverse-applied the patch successfully, and the lineage did not change.
+
+Score result:
+
+- Current best geomean: `0.43185073056556733` TFLOPS.
+- Candidate geomean: `0.32420366797036887` TFLOPS.
+- Noncausal: correct, `max_abs_error=0.001953125`, median `1.2728320360183716 ms`,
+  `0.42179242571503833` TFLOPS.
+- Causal: correct, `max_abs_error=0.015625`, median `1.0772160291671753 ms`,
+  `0.24919370741961078` TFLOPS.
+- Gate rejected the candidate because it regressed geomean throughput.
+
+Runtime change:
+
+- Planner validation now rejects standalone dynamic shared-memory K/V migrations that do not also
+  add real async-copy or double-buffering logic.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 64 passed.
+- `uv run --extra dev pytest`: 153 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
