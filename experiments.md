@@ -6793,3 +6793,50 @@ Verification:
 - `uv run --extra dev pytest`: passed, 174 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.12: Scalar async-copy retry hardening
+
+Success criteria for this checkpoint:
+
+- Refresh Ampere attention-copy guidance from primary sources before another agent step.
+- Run one bounded loop after the unpatched MMA rescore guard.
+- If the planner repeats scalar async-copy proposals, strengthen feedback without broadening the
+  command or patch surface.
+
+Source refresh:
+
+- Exa found NVIDIA's CUTLASS Ampere FlashAttention v2 example again. The relevant pattern is
+  still 128-bit global-to-shared copy atoms, swizzled Q/K/V shared layouts, Ampere tensor-core MMA,
+  register staging, and integrated online-softmax rescaling. Source:
+  https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+- Exa also surfaced FlashAttention SM80 kernel traits showing `cute::uint128_t` copy atoms,
+  BF16/FP16 SM80 tensor-core MMA, 8 BF16 values per global-copy vector, and smem layout choices for
+  head_dim128. Source:
+  https://github.com/vllm-project/flash-attention/blob/8798f277/csrc/flash_attn/src/kernel_traits.h
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_unpatched_mma_guard.json`.
+- The planner failed validation after three attempts before any candidate command ran.
+- The final validation error was the repeated scalar BF16 async-copy pattern:
+  `candidate_patch uses scalar BF16 __pipeline_memcpy_async copies; use 16-byte aligned groups for
+  Ampere async copy patches`.
+- No patch was applied, no score payload was produced, and the lineage did not change.
+
+Implementation:
+
+- Strengthened retry feedback for scalar BF16 async-copy validation errors.
+- The feedback now says the corrected decision should avoid `__pipeline_memcpy_async` entirely
+  unless the diff contains real 16-byte-group dataflow, not wrapper/API proof code.
+- Added the same scalar-async constraint to the repo context presented to the planner.
+- Runtime knowledge records the primary-source takeaway: useful Ampere async-copy patches are
+  vector-group dataflow changes coupled to MMA/online-softmax scheduling, not scalar BF16 copies.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 85 tests.
+- `uv run --extra dev pytest`: passed, 174 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
