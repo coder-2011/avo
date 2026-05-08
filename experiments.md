@@ -2470,3 +2470,91 @@ Tradeoffs and decision:
   baseline from a compatible prebuilt wheel if one becomes available for this Python/Torch/CUDA
   tuple.
 - No FA2 baseline lineage was seeded in this checkpoint.
+
+## 2026-05-08 - Checkpoint 3.16: CUDA 13 candidate extension environment
+
+Success criteria for this checkpoint:
+
+- Stop candidate CUDA seeds from hard-coding `/usr/local/cuda-12.9`.
+- Reuse the CUDA/Torch compatibility logic for both baseline builds and candidate
+  `torch.utils.cpp_extension` builds.
+- Prove a fresh CUDA candidate extension can build from an empty extension cache using the Python
+  CUDA 13 toolchain while the host image still exports CUDA 12.9 paths.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/avo/cuda_env.py` as the shared CUDA environment helper:
+  - discovers a single Python-installed `nvidia/cu*` CUDA root;
+  - checks `nvcc --version` against `torch.version.cuda`;
+  - applies compatible Python CUDA roots to `CUDA_HOME`, `CUDA_PATH`, `CUDACXX`, `PATH`,
+    `CPATH`, `LIBRARY_PATH`, and `LD_LIBRARY_PATH`;
+  - filters ambient `/usr/local/cuda*` include/lib/bin entries from the worker process;
+  - creates a local cached `libcudart.so` link shim when NVIDIA wheels only ship
+    `libcudart.so.13`.
+- Updated all CUDA candidate seed wrappers to call `prepare_torch_extension_env(...)` before
+  importing `torch.utils.cpp_extension.load`. This matters because PyTorch computes its extension
+  `CUDA_HOME` at import time.
+- Moved the FlashAttention baseline CUDA preflight helper functions from `avo.cli` into the shared
+  helper module and left the CLI as the reporting surface.
+- Added reproducible CUDA 13 build dependencies to the `cuda` and `baseline` extras:
+  `nvidia-cuda-nvcc==13.0.88`, `nvidia-cuda-crt==13.0.88`,
+  `nvidia-nvvm==13.0.88`, and `nvidia-cuda-cccl==13.0.85`.
+- Updated `/home/ubuntu/avo-ampere/README.md` so the baseline setup no longer depends on a manual
+  `uv pip install` step for those CUDA wheels.
+
+Discoveries:
+
+- A cached identity extension initially hid the candidate seed problem, so a fresh
+  `TORCH_EXTENSIONS_DIR` was required to validate the build path.
+- Selecting the Python CUDA 13 `nvcc` was not enough by itself. The host shell exported
+  `CPATH=/usr/local/cuda-12.9/include`, which caused CUDA 13 generated stubs to include CUDA 12.9
+  CRT headers and fail with `__cudaLaunch` macro errors.
+- After filtering `CPATH`, CUDA 13 compilation reached `cuda_fp16.h` and failed on missing
+  `nv/target`. Exa confirmed this header is supplied by NVIDIA's CUDA CCCL package, specifically
+  `nvidia-cuda-cccl` for the low-level header wheel.
+- After installing CCCL, the link step failed on `-lcudart` because the CUDA 13 runtime wheel ships
+  `libcudart.so.13` but no unversioned `libcudart.so`. The helper now creates a local symlink in
+  `~/.cache/avo/cuda-links/cu13/lib` and exposes it through `LIBRARY_PATH` and `LD_LIBRARY_PATH`.
+
+Online research notes:
+
+- Exa found NVIDIA's CCCL setup docs, which recommend `cuda-cccl[cu13]` for CUDA 13 installs and
+  explain that CCCL is distributed as Python packages.
+  Source: https://nvidia.github.io/cccl/unstable/python/setup.html
+- Exa found the PyPI page for `nvidia-cuda-cccl`, maintained by the NVIDIA CUDA Installer Team,
+  with CUDA 13.0.85 and newer wheels.
+  Source: https://pypi.org/project/nvidia-cuda-cccl/
+- Exa found PyTorch CUDA-runtime linker discussions showing that PyTorch extension and custom
+  builds still rely on `-lcudart`, which explains the need for an unversioned link target when
+  using NVIDIA runtime wheels.
+  Source: https://github.com/pytorch/pytorch/issues/163510
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/cuda_env.py tests/test_cli.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_cli.py` passed, 20 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 106 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere`.
+- Environment check:
+  `uv run --extra cuda python -m avo env` passed and still reports exact Torch/nvcc CUDA 13.0
+  compatibility with the venv's `nvidia/cu13` root.
+- Fresh CUDA candidate build:
+  `TORCH_EXTENSIONS_DIR="$(mktemp -d /tmp/avo-ext-cu13.XXXXXX)" env -u CUDA_HOME -u CUDA_PATH
+  uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_identity_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16
+  --dtype bf16 --causal false --repeats 1 --warmup 1 --timeout-s 240` passed with
+  `all_correct=true`.
+
+Tradeoffs and decision:
+
+- The cached `libcudart.so` link shim is local process infrastructure, not a tracked artifact. It is
+  generated only when needed and avoids mutating installed wheel contents.
+- Candidate extension builds are now CUDA 13 consistent. The first clean build still takes roughly
+  one to two minutes on the 4-vCPU host, so agent-loop scoring should keep using small smoke shapes
+  unless the extension cache is already warm.
