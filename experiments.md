@@ -2323,3 +2323,77 @@ Tradeoffs and decision:
 - We did not retry the full FA2 build immediately. The next baseline attempt should be an explicit,
   monitored install/seed step using the conservative flags, not an incidental import check.
 - This checkpoint changes setup safety only; it does not yet produce an FA2 baseline score.
+
+## 2026-05-08 - Checkpoint 3.14: baseline CUDA build preflight
+
+Success criteria for this checkpoint:
+
+- Diagnose the explicit FlashAttention-2 install failure after applying conservative build flags.
+- Surface the relevant CUDA compatibility state through `avo env` without importing or building
+  `flash_attn`.
+- Prevent `seed-baseline` from entering the score worker when `flash_attn` is absent and PyTorch
+  extension source builds are known to be blocked.
+- Update the baseline setup docs/knowledge with the new preflight.
+
+Implementation:
+
+- Ran the explicit FA2 install command with the conservative settings:
+  `FLASH_ATTN_CUDA_ARCHS=80 MAX_JOBS=1 NVCC_THREADS=1 uv pip install flash-attn==2.8.3 --no-build-isolation`.
+  The build did not fail from memory pressure; it failed in PyTorch extension setup because the
+  detected `nvcc` CUDA version was 12.9 while Torch was compiled with CUDA 13.0. The full log is in
+  `/tmp/avo-flash-attn-install.log`.
+- Verified environment facts:
+  - `nvcc` resolves to `/usr/local/cuda-12.9/bin/nvcc`;
+  - `nvcc --version` reports CUDA 12.9;
+  - `uv run --extra cuda python -m avo env` reports Torch `2.11.0+cu130` with `torch_cuda` 13.0.
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py`:
+  - added a `baseline_build` block to `avo env`;
+  - mirrored PyTorch extension discovery by checking `CUDA_HOME`/`CUDA_PATH` first, then `PATH`;
+  - parses `nvcc --version` and compares it with `torch.version.cuda`;
+  - reports exact match, minor mismatch warning, major mismatch blocker, missing `nvcc`, or missing
+    Torch CUDA;
+  - keeps the existing FA2 build settings (`FLASH_ATTN_CUDA_ARCHS=80`, `MAX_JOBS=1`,
+    `NVCC_THREADS=1`) in the status payload;
+  - makes `seed-baseline` fail early only when `flash_attn` is not installed and the source-build
+    environment is blocked.
+- Updated `/home/ubuntu/avo-ampere/tests/test_cli.py` with parser, compatibility, env path,
+  status, and early-rejection coverage.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md` to require checking `baseline_build` before an FA2
+  install attempt.
+
+Online research notes:
+
+- Exa found PyTorch's primary `torch.utils.cpp_extension` source. It confirms that PyTorch finds
+  CUDA through `CUDA_HOME`/`CUDA_PATH` or `nvcc`, parses `nvcc --version`, and raises the same CUDA
+  mismatch error when the detected CUDA major version differs from `torch.version.cuda`.
+  Source: https://github.com/pytorch/pytorch/blob/main/torch/utils/cpp_extension.py
+- Exa also found a PyTorch issue discussing the same extension-build behavior and the practical
+  workaround of pointing `CUDA_HOME` at the toolkit matching the Torch CUDA build.
+  Source: https://github.com/pytorch/pytorch/issues/136845
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/cli.py tests/test_cli.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_cli.py` passed, 15 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 101 tests.
+- Whitespace:
+  `git diff --check` passed in `/home/ubuntu/avo-ampere` and `/home/ubuntu/avo`.
+- Environment check:
+  `uv run --extra cuda python -m avo env` passed and reported `compatibility="major_mismatch"`,
+  `flash_attn_installed=false`, `torch_cuda="13.0"`, `nvcc_cuda="12.9"`, and
+  `ok_for_torch_extension_build=false`.
+
+Tradeoffs and decision:
+
+- This preflight cannot stop `uv run --extra baseline ...` from resolving the `baseline` extra
+  before AVO code starts. The docs now use `uv pip install ...` after the preflight instead.
+- A minor CUDA mismatch is treated as a warning rather than a blocker, matching PyTorch's extension
+  behavior. The current environment is a major mismatch and remains blocked for FA2 source builds.
+- No baseline lineage was seeded in this checkpoint; the next practical step is to provide a CUDA
+  13.0 `nvcc` toolchain or use a Torch build compatible with the installed CUDA 12.9 toolkit.
