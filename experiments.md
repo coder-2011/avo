@@ -519,3 +519,79 @@ Tradeoffs and uncertainty:
   identity CUDA kernel after the fact. The next real implementation step remains moving a small
   attention computation into the candidate kernel while keeping the scorer and lineage gate
   unchanged.
+
+## 2026-05-08 - Checkpoint 2.0: naive CUDA attention math candidate
+
+Success criteria for this checkpoint:
+
+- Put actual scaled dot-product attention math behind the candidate scorer interface.
+- Keep the implementation explicitly small and correctness-oriented, not optimized.
+- Preserve the default benchmark suite unchanged while allowing tiny smoke shapes for slow
+  correctness kernels.
+- Verify both causal and non-causal behavior against PyTorch SDPA.
+- Verify BF16 works on the A6000, even if the tiny smoke also uses FP32 for stricter numeric
+  comparison.
+
+Implementation:
+
+- Added `/home/ubuntu/avo-ampere/candidates/cuda_naive_attention_seed.py`.
+- Added CUDA extension sources under
+  `/home/ubuntu/avo-ampere/candidates/cuda_naive_attention/`:
+  - `attention.cpp`;
+  - `attention_kernel.cu`.
+- The CUDA kernel is intentionally naive:
+  - one CUDA block per `(batch, head, query)` row;
+  - one thread computes that entire row;
+  - computes `QK^T / sqrt(D)`;
+  - applies causal masking by limiting keys to `query + 1`;
+  - uses max-subtracted softmax for numerical stability;
+  - accumulates in FP32 before casting to the output dtype.
+- Added candidate guardrails in Python:
+  - `seq_len <= 128`;
+  - `head_dim <= 128`.
+  This prevents accidental full-suite runs with a deliberately slow seed.
+- Added CLI score shape overrides:
+  - `--head-dim`;
+  - `--num-heads`;
+  - `--total-tokens`;
+  - `--dtype {bf16,fp16,fp32}`.
+- Defaults remain the architecture suite: BF16, head dim 128, 16 heads, total tokens 32768,
+  sequence lengths 4096/8192/16384/32768.
+- Updated README with the tiny naive-attention smoke command.
+
+Online research notes:
+
+- Exa research found NVIDIA's FlashAttention tuning discussion of numerically stable softmax
+  and online softmax. The naive kernel uses the simpler max-subtracted safe softmax form
+  before any online/tiled optimization.
+  Source: https://developer.nvidia.cn/blog/tuning-flash-attention-for-peak-performance-in-nvidia-cuda-tile/
+- Exa research also found examples/discussion of attention kernels accumulating dot products,
+  softmax statistics, and outputs in FP32 for stability. The seed follows that stability
+  pattern while intentionally avoiding tiling and MMA complexity.
+  Source: https://arxiv.org/html/2603.01960v1
+
+Verification:
+
+- `uv run --extra dev ruff check .` in `/home/ubuntu/avo-ampere`: passed.
+- `uv run --extra dev pytest` in `/home/ubuntu/avo-ampere`: 48 passed.
+- Clean FP32 extension smoke:
+  `rm -rf /home/ubuntu/.cache/torch_extensions/py312_cu130/avo_cuda_naive_attention_seed && AVO_VERBOSE_EXT_BUILD=1 uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_naive_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype fp32 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Build output showed `/usr/local/cuda-12.9/bin/nvcc` with
+    `-gencode=arch=compute_86,code=sm_86`.
+  - Non-causal FP32: max abs error `7.15e-07`, 1.077 ms.
+  - Causal FP32: max abs error `4.77e-07`, 1.000 ms.
+- Tiny BF16 smoke:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_naive_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+  passed.
+  - Non-causal BF16: max abs error `0.00390625`, 0.867 ms.
+  - Causal BF16: max abs error `0.015625`, 0.645 ms.
+
+Tradeoffs and uncertainty:
+
+- This is the first actual CUDA attention math candidate, but it is not a viable performance
+  kernel. It exists to establish correctness, scorer integration, dtype behavior, and sm_86
+  extension compilation before moving toward tiled/online-softmax/MMA implementations.
+- The scorer now supports tiny smoke shapes for slow kernels. The default architecture
+  benchmark remains unchanged, so full-suite results are still comparable to the original
+  AVO plan.
