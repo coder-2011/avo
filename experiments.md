@@ -8448,3 +8448,80 @@ Verification:
 - `uv run --extra dev pytest`: passed, 229 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.49: Batched transforms and compile-loop preflight
+
+Success criteria for this checkpoint:
+
+- Fix the false repeated-fingerprint signal caused by synthetic planning-failure records.
+- Make shape-graduation edits expressible as a small structured batch, not raw CUDA diffs.
+- Keep batch transforms generic enough to avoid another `SMOKE_SEQUENCES`-only recovery path.
+- Prevent the planner from spending repeated loop steps on the same successful compile-only
+  structured transform.
+- Verify that the loop can graduate beyond the seq256 smoke cap and score a larger validation
+  workload.
+
+Research note:
+
+- Exa search for agent retry/failure-loop design surfaced the same principle in multiple sources:
+  classify failures before deciding retry or fallback behavior, persist failure signatures to avoid
+  infinite implement-verify loops, and enforce deterministic guardrails around probabilistic planner
+  output.
+- Useful references:
+  https://clarion.ai/insights-resilient-agentic-ai-pipelines-retry-fallback-human-in-the-loop/,
+  https://docs.fabro.sh/execution/failures, and
+  https://agentpatterns.ai/verification/deterministic-guardrails/.
+
+Live loop results:
+
+- `attempts/loop_after_planning_fingerprint_fix.json`: the planner inferred a
+  `set_constexpr_int` transform for `kMaxSeqLen=512`, applied it, and compiled successfully on
+  sm86 with no spills, 40 registers, 1 barrier, and 9920 bytes shared memory. It produced no score
+  payload and cleanup reverted the patch.
+- Anthropic tool-schema iterations showed that nested `steps` arrays made the provider schema too
+  complex. The provider-facing batch interface is now `op=batch` plus compact `steps_json`; local
+  validation still normalizes it into `steps`.
+- `attempts/loop_after_python_set_transform.json` and
+  `attempts/loop_after_batch_score_validator.json`: the planner materialized the two-file batch
+  transform (`kMaxSeqLen=512` plus adding `512` to the wrapper sequence set) and compile-checked it
+  successfully, but kept repeating compile-only diagnostics.
+- `attempts/loop_after_repeated_compile_hard_preflight.json`: after adding the cross-step hard
+  preflight against repeated successful compile-only transforms, the planner scored the same batch
+  instead of compiling again.
+- The seq512 score passed correctness:
+  - Noncausal: max error `0.001953125`, median `1.3272960186004639 ms`,
+    `3.2358774800882233` TFLOPS.
+  - Causal: max error `0.0078125`, median `1.2746880054473877 ms`,
+    `1.6847131524127585` TFLOPS.
+  - Geomean: `2.334850177270671` TFLOPS on `seq_len=512`, `total_tokens=2048`,
+    `num_heads=8`, `head_dim=128`, BF16, both causal modes.
+- Lineage stayed unchanged because the gate compares against the current best shape set and rejected
+  the candidate as `candidate benchmark cases differ from current best`.
+
+Decision:
+
+- Attempt fingerprints now include planning failure class and truncated validation detail for
+  planning-validation failures, so distinct planner-interface errors do not collapse into one bogus
+  fingerprint.
+- `candidate_transform` now supports a small ordered batch of tiny steps. The tool schema uses
+  `steps_json` to stay provider-compatible; runtime validation enforces one to four step objects.
+- Added generic `add_int_to_python_set` transform materialization. It updates a single-line Python
+  integer set assignment and rejects ambiguous or non-integer set contents.
+- Parser recovery can infer generic Python set names such as `ALLOWED_SEQUENCES` from prose and
+  `files_to_inspect`, rather than hardcoding the historical `SMOKE_SEQUENCES` case.
+- Removed unused exact CUDA attempt-pattern helpers from `agent.py`; the remaining hard checks are
+  structural tracks such as WMMA shape/type, async-copy granularity/API shape, symbol lifecycle,
+  tile-local shared-memory addressing, complete shape graduation, and no-effect skeletons.
+- Patched MMA scores beyond the smoke cap are now allowed only when the structured transform changes
+  both the wrapper and kernel paths together. Wrapper-only cap edits are rejected.
+- Attempt history now emits a follow-up signal after a successful compile-only structured transform,
+  and command planning has a hard cross-step preflight that rejects repeating that same transform
+  with another compile command. The loop must score it or choose a materially different transform
+  family.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 187 tests.
+- `uv run --extra dev pytest`: passed, 240 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
