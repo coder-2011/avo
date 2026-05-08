@@ -5625,3 +5625,41 @@ Verification:
 - `uv run --extra dev pytest`: 153 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.87: Head-dim128 shared threshold guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the dynamic K/V migration regression guard.
+- Evaluate the proposed direct `head_dim <= 128` shared-path threshold change.
+- Prevent repeating the threshold-only change if it is unsafe.
+
+Loop result:
+
+- The agent proposed changing `can_stage_shared` from `head_dim <= 64` to `head_dim <= 128`.
+- The generated patch was rejected before scoring because `git apply --check` reported a corrupt
+  patch.
+- The underlying one-line change was simple, so it was applied manually and scored with the same
+  seq256/head_dim128 BF16 suite.
+- The manual score failed correctness, so the threshold change was reverted.
+- The lineage did not change.
+
+Manual score result:
+
+- Noncausal failed with a CUDA unknown error before timing samples were recorded.
+- Causal failed with a CUDA misaligned-address error before timing samples were recorded.
+- Candidate geomean was `0.0` TFLOPS.
+
+Runtime change:
+
+- Planner validation now rejects direct threshold-only patches that set the warp-row shared path to
+  `head_dim <= 128`.
+- Future head_dim128 shared-path attempts must include a real alignment or layout fix, not only a
+  threshold increase.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 65 passed.
+- `uv run --extra dev pytest`: 154 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
