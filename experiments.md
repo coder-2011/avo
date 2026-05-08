@@ -3961,3 +3961,58 @@ Tradeoffs and decision:
   if the diff applied.
 - The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
   `cfe5b45`.
+
+## 2026-05-08 - Checkpoint 3.44: Record MMA PV chunk offset failure
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the widened-row indexing guard.
+- Capture whether the next two-chunk MMA head-dim32 attempt passes correctness.
+
+Primer and research context:
+
+- Re-read the active architecture notes and runtime knowledge base using the repo-primer workflow.
+- Refreshed Exa search against primary Ampere FlashAttention sources.
+- The same source direction remains valid: CUTLASS CuTeDSL Ampere FlashAttention v2 uses 128-bit
+  `cp.async`, Ampere BF16/FP16 tensor-core MMA with `16x8x16` atoms, register pipelining, online
+  softmax rescaling, and head-dim padding/alignment. Dao-AILab's SM80 forward path reinforces the
+  need for explicit `cp.async` staging, bounded predicates, and separate QK/PV MMA handling.
+
+Loop result:
+
+- The agent proposed a two-chunk MMA head_dim32 patch and this time the patch applied cleanly.
+- The selected score command was:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 32 --total-tokens 32 --num-heads 1 --head-dim 32 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+- The score command completed without a compile failure, but both cases failed correctness.
+- Noncausal case: max_abs_error `1.748046875`, `0.4551360011100769` ms, TFLOPS `0.0`.
+- Causal case: max_abs_error `2.546875`, `0.5319679975509644` ms, TFLOPS `0.0`.
+- Gate result: rejected for failed correctness.
+- Cleanup result: checked reverse patch application succeeded.
+
+CUDA finding:
+
+- The patch widened both `pv_tile` and `output_acc`, which fixed the previous likely shared-memory
+  overrun class.
+- The remaining bug is likely the PV chunk store offset: it used
+  `&pv_tile[chunk * kTile * 16]` while storing each 16-wide output fragment with leading dimension
+  `kHeadDim == 32`.
+- In a row-major 16x32 output tile, chunk 1 is a column offset, not a later row block. The chunk
+  store should be shaped like `&pv_tile[chunk * 16]` with leading dimension `kHeadDim`.
+
+Knowledge update:
+
+- Runtime commit `a9274e6 docs: record mma pv chunk offset guard` records this guardrail in
+  `knowledge/ampere.md`.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `a9274e67d48455df50b673a28320b67a69a568ae`.
+
+Tradeoffs and decision:
+
+- This is progress from corrupt diff and large correctness failures to a compiling patch with smaller
+  tolerance error, but it is still not lineage-eligible.
+- The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
+  `cfe5b45`.
