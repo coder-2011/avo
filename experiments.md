@@ -5467,3 +5467,43 @@ Verification:
 - `uv run --extra dev pytest`: 150 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.83: Pragma-only scored regression guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop from the accepted shared-memory skew best.
+- Record whether a standalone unroll pragma can build on the new best.
+- Prevent repeat standalone pragma-only patches if the scored result regresses.
+
+Loop result:
+
+- The agent proposed adding `#pragma unroll` before the two V accumulation `key_inner` loops in the
+  warp-row kernel.
+- The patch applied and scored the existing seq256/head_dim128 BF16 warp-row suite.
+- The candidate passed correctness but regressed geomean throughput.
+- Cleanup reverse-applied the patch successfully, so the runtime source kept only the accepted
+  shared-memory skew.
+- The lineage did not change.
+
+Score result:
+
+- Current best geomean: `0.43185073056556733` TFLOPS.
+- Candidate geomean: `0.2576601941393183` TFLOPS.
+- Noncausal: correct, `max_abs_error=0.001953125`, median `1.6269760131835938 ms`,
+  `0.32998084031335845` TFLOPS.
+- Causal: correct, `max_abs_error=0.015625`, median `1.3342399597167969 ms`,
+  `0.20118978902189197` TFLOPS.
+- Gate rejected the candidate because it regressed geomean throughput.
+
+Runtime change:
+
+- Planner validation now rejects standalone pragma-only performance patches.
+- Unroll pragmas remain possible only when paired with a substantive code change and a bounded score.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 62 passed.
+- `uv run --extra dev pytest`: 151 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
