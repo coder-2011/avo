@@ -4948,3 +4948,36 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `68b742870989771f674b6e07c37e6037b85fe316`.
+
+## 2026-05-08 - Checkpoint 3.69: Stale MMA patch rejection guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after closing the warp-row unroll regression.
+- Prevent another self-described stale-code MMA patch from becoming an executed attempt.
+
+Loop result:
+
+- The agent proposed another head_dim32 two-chunk MMA patch.
+- The patch was rejected by `git apply --check` because its context did not match the current MMA
+  source.
+- The patch also left stale single-chunk QK load/mma lines after the new two-chunk loop.
+- The decision risk text identified the issue: stale QK load lines might reference undeclared
+  fragments and must be removed.
+
+Runtime change:
+
+- Planner validation now also rejects non-empty patches when the decision text mentions stale code
+  together with `must remove` or `undeclared`.
+- Added a regression test for a stale-code MMA patch warning.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 53 passed.
+- `uv run --extra dev pytest`: 142 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
+  `53b90824e7003831fa5e3e5bcafacca3837fad09`.
+- Runtime push/fetch verification after knowledge update: local `main` and `origin/main` both
+  resolved to `400aaa5ddd2e4c375494ca8df7902d527e9fd125`.
