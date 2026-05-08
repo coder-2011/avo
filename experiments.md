@@ -7099,3 +7099,43 @@ Verification:
 - `uv run --extra dev pytest`: passed, 181 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.19: Self-invalid patch retry feedback
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the single-buffer V-staging repeat guard.
+- If planning fails before command execution, keep the fix at the decision boundary.
+- Preserve the existing candidate source and lineage unless a patch clears validation and scoring.
+
+Source refresh:
+
+- Exa refreshed Ampere/SM80 attention references before this run. The relevant reinforcement was
+  unchanged: production Ampere paths use register fragments, online-softmax rescaling, and tuned
+  block sizes; they do not justify no-op skeletons or self-invalid patches.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_single_v_guard.json`.
+- The planner failed validation after three attempts.
+- Final validation error: `candidate_patch is described as known invalid by the decision itself;
+  found phrase 'will cause a compile error'`.
+- No command ran, no patch was applied, no score payload was produced, and the lineage did not
+  change.
+
+Decision:
+
+- The self-invalid patch validator is doing the right thing, but the retry feedback was too generic.
+- Added targeted retry feedback: do not retry patches whose own hypothesis, expected effect, or risk
+  says they will fail compile, break correctness, are unused, or are not ready. Return a corrected
+  raw diff with the flaw removed, or switch to `No edit;` diagnostic mode.
+- Runtime knowledge records the self-invalid planning failure.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 93 tests.
+- `uv run --extra dev pytest`: passed, 182 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
