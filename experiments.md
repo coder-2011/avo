@@ -1409,3 +1409,60 @@ Tradeoffs and decision:
 - This is a readiness checkpoint, not a live Anthropic planner run. It removes ambiguity about why
   a planner smoke can fail, but the actual `agent-plan` call still requires a valid key in the
   process environment or a supplied env file.
+
+## 2026-05-08 - Checkpoint 3.1: live evolve-once smoke in throwaway lineage
+
+Success criteria for this checkpoint:
+
+- Exercise the current live Anthropic planner with `--env-file ../avo/.env.local`.
+- Keep the run isolated from the real runtime repo and real lineage state.
+- Verify the strict-tool decision can drive the bounded command executor.
+- Verify score extraction, correctness gating, temp lineage commit, and attempts-dir persistence.
+- Avoid code changes unless the live path exposes a reliability bug.
+
+Online research notes:
+
+- Exa search found Anthropic's current strict tool-use guidance: setting `strict: true` on the tool
+  definition constrains tool `input` to the schema and returns validated data in the `tool_use`
+  block. This is the exact contract the AVO planner is using for variation decisions.
+  Source: https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use
+- Exa search found Anthropic's parallel tool-use docs and troubleshooting notes confirming that
+  `disable_parallel_tool_use=true` with a specific tool choice should produce exactly one tool call
+  for the request. That supports the current single-decision planner boundary.
+  Sources:
+  - https://console.anthropic.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+  - https://console.anthropic.com/docs/en/agents-and-tools/tool-use/troubleshooting-tool-use
+
+Commands and results:
+
+- Live planner smoke:
+  `uv run --extra agent python -m avo agent-plan --lineage /tmp/avo-agent-live-lineage --knowledge knowledge/ampere.md --attempts-dir /tmp/avo-agent-live-attempts --env-file ../avo/.env.local`
+  passed and returned a validated JSON decision.
+- The decision used existing local files only:
+  - `candidates/cuda_warp_rows_attention_seed.py`;
+  - `candidates/cuda_warp_rows_attention/attention_kernel.cu`;
+  - `candidates/cuda_warp_rows_attention/attention.cpp`.
+- The bounded `next_command` was:
+  `avo score --backend candidate --candidate candidates/cuda_warp_rows_attention_seed.py --seq-lens 16 --total-tokens 16 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`.
+- Live one-step smoke:
+  `uv run --extra agent --extra cuda python -m avo evolve-once --lineage /tmp/avo-agent-live-lineage --knowledge knowledge/ampere.md --attempts-dir /tmp/avo-agent-live-attempts --step-json /tmp/avo-agent-live-step.json --env-file ../avo/.env.local --timeout-s 300`
+  passed.
+- The bounded score command returned `all_correct: true`.
+  - Non-causal BF16 smoke: max abs error `0.00390625`, `0.7721279859542847` ms,
+    `2.121928009091753e-05` TFLOPS.
+  - Causal BF16 smoke: max abs error `0.015625`, `0.7422080039978027` ms,
+    `1.1037337182939155e-05` TFLOPS.
+  - Geomean: `1.5303736443845484e-05` TFLOPS.
+- The temp lineage at `/tmp/avo-agent-live-lineage` was initialized and accepted one candidate
+  commit because the best previous geomean was `0.0`.
+- The attempts directory wrote
+  `/tmp/avo-agent-live-attempts/2026-05-08T03-54-12-00-00.json`.
+
+Tradeoffs and decision:
+
+- This verifies the live agent-orchestrator path, but it does not represent a new real lineage
+  improvement. The run used a throwaway lineage and repeated the tiny warp-row smoke as a safe
+  end-to-end check.
+- No runtime code change was needed. The live agent still selected a conservative verification
+  command, which is acceptable for an empty temporary lineage but shows the next real progress
+  still needs a safe edit/evaluate mutation path or a tensor-core candidate direction.
