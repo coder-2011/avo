@@ -5978,3 +5978,57 @@ Verification:
 - `uv run --extra dev pytest`: 162 passed.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed.
+
+## 2026-05-08 - Checkpoint 3.96: Manual MMA head_dim64 compile/score proof
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the BF16 `score_tiles` guard.
+- Preserve the useful compile-clean part of the generated MMA head_dim64 direction.
+- Verify the manually applied four-chunk MMA seed with compile and score checks.
+
+Loop result:
+
+- The agent proposed extending the MMA seed from head_dim32 to head_dim64 by changing
+  `kHeadDim` to 64 and changing the QK/PV chunk loops from two 16-wide chunks to four.
+- The patch applied and `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/mma_head_dim_64_four_chunk` passed on sm86.
+- The orchestrator cleaned the patch up because the loop step was compile-only and produced no
+  score/gate decision.
+
+Manual runtime change:
+
+- Reapplied the four-chunk head_dim64 structure and fixed the stale runtime error message.
+- The MMA seed now uses `kHeadDim = 64`, keeps score/probability tiles at 16x16, widens
+  `pv_tile` and `output_acc` to 16x64, and stores each PV chunk at `&pv_tile[chunk * 16]`
+  with leading dimension 64.
+- The wrapper, README smoke command, agent repo context, score validator, and tests now treat
+  seq_len 16/32, head_dim 64, total_tokens <= 32, and num_heads 1 as the unpatched MMA cap.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: 73 passed.
+- `uv run --extra cuda python -m avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/manual_mma_head_dim64`: passed on sm86 with no spills, 40 registers, 1 barrier,
+  9920 bytes shared memory, 400 bytes `cmem[0]`, 224 bytes `cmem[4]`, and 28 bytes global memory.
+- `uv run --extra cuda python -m avo score --backend candidate --candidate
+  candidates/cuda_mma_attention_seed.py --seq-lens 32 --total-tokens 32 --num-heads 1
+  --head-dim 64 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 300`:
+  all_correct true, geomean `0.0003318536197406504` TFLOPS.
+- `uv run --extra dev pytest`: 162 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+
+Score details:
+
+- Noncausal: correct, max_abs_error `0.00390625`, median `0.6331200003623962 ms`,
+  `0.00041405104853732224` TFLOPS, samples
+  `[0.6331200003623962, 0.5443199872970581, 0.8219199776649475]`.
+- Causal: correct, max_abs_error `0.00390625`, median `0.4927999973297119 ms`,
+  `0.0002659740274152339` TFLOPS, samples
+  `[0.49248000979423523, 0.4991680085659027, 0.4927999973297119]`.
+
+Decision:
+
+- This is structural correctness progress, not a lineage improvement. The workload signature is
+  seq32/head_dim64 and remains incomparable to the current seq256/head_dim128 warp-row best.
