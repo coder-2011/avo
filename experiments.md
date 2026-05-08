@@ -4502,3 +4502,40 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `a75b2425de54c8ecbe7009019e42f0f69f361474`.
+
+## 2026-05-08 - Checkpoint 3.56: Shared-memory opt-in and tile-width guardrails
+
+Success criteria for this checkpoint:
+
+- Research the static shared-memory limit exposed by the failed double-buffered cp.async compile.
+- Record the exact sm86 rule and any cleanup needed after the rejected attempt.
+
+Research result:
+
+- Exa found NVIDIA's Ampere tuning guide and CUDA function-attribute documentation as the relevant
+  primary references.
+- On compute capability 8.6, a block can address up to 99 KB shared memory, but static shared memory
+  remains limited to 48 KB for architectural compatibility.
+- Above-48KB use requires dynamic shared memory plus explicit opt-in, and CUDA function attributes
+  constrain requested dynamic shared memory plus static shared memory to the device opt-in limit.
+
+Cleanup:
+
+- After the rejected cp.async attempt, the runtime worktree showed an unaccepted residue:
+  `kTileKeys = 64` in the warp-row kernel.
+- That is unsafe with the current one-key-per-lane mapping: 32 lanes would process only keys 0..31
+  while the tile loop advances by 64, skipping half the keys.
+- Restored `kTileKeys = kWarpSize` and verified the source diff was clean before committing the
+  knowledge update.
+
+Runtime knowledge update:
+
+- Do not propose static shared-memory allocations above 48 KB on sm86.
+- Do not change `kTileKeys` above `kWarpSize` unless the score and V accumulation loops are changed
+  to map multiple key columns per lane.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `72facba19d863b51ed6a78e5dc8fe5cbc8743abd`.
