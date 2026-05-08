@@ -5240,3 +5240,31 @@ Verification:
 - `git diff --check`: passed.
 - Runtime push/fetch verification after code guard: local `main` and `origin/main` both resolved to
   `177d640cc221f7f1b3f9df7873bb52263b6f4181`.
+
+## 2026-05-08 - Checkpoint 3.77: Async-copy alignment nuance refresh
+
+Success criteria for this checkpoint:
+
+- Refresh Ampere async-copy guidance before the next loop.
+- Preserve the useful 16-byte BF16 grouping rule without misstating the CUDA API minimum.
+
+Research result:
+
+- Exa re-surfaced the official CCCL/libcu++ `cuda::memcpy_async` reference and NVIDIA Ampere CUDA
+  architecture material.
+- CCCL documents that Ampere+ can lower aligned global-to-shared copies to `cp.async` with at least
+  4-byte alignment.
+- The Ampere architecture material calls out a better async-copy path when the data size and
+  alignment are 16 bytes.
+
+Decision:
+
+- Keep rejecting scalar 2-byte BF16 `__pipeline_memcpy_async` patches as noise.
+- Treat 4-byte aligned async copies as API-valid smokes or carefully justified tails, not the target
+  for throughput work.
+- Continue steering BF16 throughput attempts toward 16-byte groups, which correspond to eight BF16
+  values, with scalar tails handled separately.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
