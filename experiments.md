@@ -1222,3 +1222,63 @@ Tradeoffs and decision:
 - The high non-causal CV in the smoke confirms why this is useful. Future larger comparisons
   should use more warmup and more trials, and eventually profiler counters, before accepting small
   performance deltas as real.
+
+## 2026-05-08 - Checkpoint 2.8: reject degenerate lineage score payloads
+
+Success criteria for this checkpoint:
+
+- Tighten the lineage gate without changing candidate scoring or CUDA kernels.
+- Prevent malformed or degenerate score records from becoming accepted lineage commits.
+- Keep valid non-empty score payloads accepted when they pass correctness and throughput gates.
+- Verify with focused gate tests and the full unit suite.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/lineage.py`.
+- `decide_gate` now rejects a candidate before throughput comparison when:
+  - `all_correct` is false;
+  - `cases` is missing, not a list, or empty;
+  - `geomean_tflops` is non-positive or non-finite.
+- Updated `/home/ubuntu/avo-ampere/tests/test_lineage.py` to cover empty cases, zero geomean,
+  and infinite geomean.
+- Updated `/home/ubuntu/avo-ampere/tests/test_evolve.py` mock accepted scores so they represent
+  the real score shape more closely with a non-empty `cases` list.
+- Updated `/home/ubuntu/avo-ampere/knowledge/ampere.md` gate notes.
+
+Online research notes:
+
+- Exa search on evolutionary/code-agent gating surfaced a common pattern: correctness/reviewer
+  results are hard eligibility gates, and score selection happens after those gates. The local
+  change keeps that shape by treating malformed score structure and degenerate throughput as hard
+  eligibility failures before comparing geomean.
+  Source: https://arxiv.org/pdf/2604.01210
+- The same search also surfaced noisy-selection discussions in evolutionary systems. I did not add
+  Elo, tournament selection, or population-level logic here because the current architecture is a
+  single-lineage AVO loop; this checkpoint only hardens the existing single-lineage gate.
+  Source: https://www.arxiv.org/pdf/2604.04347
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/lineage.py tests/test_lineage.py tests/test_evolve.py`
+  passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_lineage.py tests/test_evolve.py`
+  passed, 16 tests.
+- Full lint:
+  `uv run --extra dev ruff check .`
+  passed.
+- Full unit suite:
+  `uv run --extra dev pytest`
+  passed, 57 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+
+Tradeoffs and decision:
+
+- This is deliberately stricter than the previous gate. Programmatic tests that used empty
+  `cases` as placeholder accepted scores now need a non-empty list, which better matches actual
+  score output.
+- The gate still does not enforce a minimum relative improvement above measurement noise. That is
+  a separate policy choice; the current change only prevents clearly invalid score payloads from
+  entering lineage.
