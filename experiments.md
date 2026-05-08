@@ -8118,3 +8118,55 @@ Verification:
 - `uv run --extra dev pytest`: passed, 210 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.42: Self-described do-not-apply patch guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the unsupported M=32 WMMA guard.
+- If the planner identifies its own patch as malformed, reject that class before future patch
+  application.
+- Preserve the compile failure and validation fix in runtime knowledge and the experiment log.
+
+Source refresh:
+
+- Exa refreshed CUDA function-specifier context. NVIDIA's CUDA language docs define
+  `__device__` and inlining specifiers such as `__forceinline__` as function annotations; this
+  supports the local diagnosis that helper functions must be placed as complete declarations, not
+  spliced into an existing `__global__` kernel parameter list.
+  Source: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_m32_wmma_guard.json`.
+- The planner proposed adding warp-level reduction helpers above the MMA kernel, but the raw diff
+  inserted those helpers after the first `__global__ void mma_attention_kernel(` line and before the
+  existing parameter list.
+- The patch applied, NVCC rejected it, and cleanup reverse-applied it successfully.
+- No score payload was produced and lineage stayed unchanged.
+
+Compile failure:
+
+- NVCC reported `invalid specifier on a parameter` at the inserted
+  `__device__ __forceinline__` helper.
+- The next parse errors came from the helper body being located inside the kernel declaration
+  context instead of at file scope.
+- The decision risk text already said this would cause NVCC to fail and explicitly said
+  "Do not apply this patch".
+
+Decision:
+
+- Runtime validation now treats `do not apply this patch` and `will cause nvcc to fail` as
+  self-invalid descriptions for non-empty candidate patches.
+- Runtime knowledge records that CUDA helper functions must be placed as complete file-scope
+  declarations before the kernel declaration or after the kernel body, not inside a function
+  signature.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 121 tests.
+- `uv run --extra dev pytest`: passed, 211 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
