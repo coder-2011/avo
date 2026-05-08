@@ -4393,3 +4393,33 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `55499823850b22dda2061672d14d5238b0e21a7f`.
+
+## 2026-05-08 - Checkpoint 3.53: Record WMMA fragment layout guard
+
+Success criteria for this checkpoint:
+
+- Research the WMMA fragment-indexing risk exposed by the compile-first warp-row MMA patch.
+- Add the resulting guardrail to the runtime knowledge base.
+
+Research result:
+
+- Exa and the official CUDA C++ Programming Guide both point to the same rule: WMMA fragment
+  internal storage is not a stable row/column layout.
+- The guide says matrix elements are distributed across warp lanes and the mapping into fragment
+  storage is unspecified and can change across architectures.
+- `load_matrix_sync`, `mma_sync`, and `store_matrix_sync` are warp-wide operations; pointer,
+  leading dimension, layout, and template parameters must be the same across warp lanes.
+
+Runtime knowledge update:
+
+- Do not infer row or column positions from `fragment.x[]`.
+- Uniform per-element transforms on a fragment are acceptable, but row/column selection should use
+  `wmma::store_matrix_sync` into memory with an explicit layout before indexing.
+- This directly applies to the previous warp-row WMMA compile patch, which tried to pick row 0 from
+  `score_frag.x[]`.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `f8f41f9c939c406f87b57a4aca60d0aa1e1b49a3`.
