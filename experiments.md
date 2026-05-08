@@ -1964,3 +1964,80 @@ Tradeoffs and decision:
 - Direct `commit-score` remains score-only because it has no source root or candidate patch context.
 - This moves the lineage closer to the architecture writeup's `(source, score)` requirement, but a
   complete multi-step autonomous search loop is still missing.
+
+## 2026-05-08 - Checkpoint 3.9: bounded evolve loop
+
+Success criteria for this checkpoint:
+
+- Add a minimal multi-step autonomous driver without expanding the single-step safety surface.
+- Keep a hard loop cap so the agent cannot run indefinitely.
+- Require attempt-history storage so each step can see recent accepted, rejected, and failed
+  attempts.
+- Stop on accepted candidates, cleanup failure, or max-step exhaustion.
+- Preserve the existing bounded command allowlist, candidate-patch validator, lineage gate, and
+  rejected-patch cleanup behavior.
+
+Implementation:
+
+- Updated `/home/ubuntu/avo-ampere/avo/cli.py`:
+  - added `avo evolve-loop`;
+  - refactored `evolve-once` through a shared `_run_evolve_step(...)` helper;
+  - required `--attempts-dir` for `evolve-loop` cross-step memory;
+  - added `--max-steps` with a positive-value guard and default of 3;
+  - added optional `--loop-json` summary output;
+  - repeated the existing request, bounded command, gate, and cleanup unit until accepted,
+    cleanup-failed, or max-steps.
+- Updated `/home/ubuntu/avo-ampere/tests/test_cli.py`:
+  - covered a two-step loop where the first score is rejected and written into attempt memory;
+  - verified the second prompt sees the first rejected attempt;
+  - verified the loop stops on acceptance, writes per-step records, and writes the loop summary;
+  - covered the required `--attempts-dir` guard.
+- Updated `/home/ubuntu/avo-ampere/README.md` and
+  `/home/ubuntu/avo-ampere/knowledge/ampere.md` with the new command, stop conditions, and
+  remaining limitation: this is a capped loop, not a full long-running supervisor.
+
+Online research notes:
+
+- Exa found Anthropic Agent SDK docs that separate caller-managed tool loops from managed agent
+  loops and describe hooks that can validate, log, block, or transform lifecycle events. This
+  supports keeping AVO's loop small and explicit around the existing validated one-step unit.
+  Source: https://console.anthropic.com/docs/it/agent-sdk/stop-reasons
+- Exa found Vercel AI SDK loop-control docs where `stopWhen` controls multi-step agent loops and
+  the default maximum step count is 20 as a safety measure. This supports making a hard max-step
+  cap first-class.
+  Source: https://ai-sdk.dev/v7/docs/agents/loop-control
+- Exa found a practical agent-loop writeup that treats max iterations as a key safety control and
+  discusses loop fingerprinting/no-progress detection as a future defense. This matches the current
+  tradeoff: max-step cap now, richer no-progress detection later.
+  Source: https://github.com/stevekinney/stevekinney.net/blob/main/writing/agent-loops.md
+- Exa found AgentFactory loop notes that call max iterations the primary safety net for autonomous
+  loops.
+  Source: https://agentfactory.panaversity.org/docs/General-Agents-Foundations/general-agents/ralph-wiggum-loop
+
+Verification:
+
+- Focused lint:
+  `uv run --extra dev ruff check avo/cli.py tests/test_cli.py` passed.
+- Focused tests:
+  `uv run --extra dev pytest tests/test_cli.py` passed, 9 tests.
+- Full lint:
+  `uv run --extra dev ruff check .` passed.
+- Full unit suite:
+  `uv run --extra dev pytest` passed, 91 tests.
+- Whitespace:
+  `git diff --check` in `/home/ubuntu/avo-ampere` passed.
+- Live agent smoke:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage /tmp/avo-loop-lineage --knowledge knowledge/ampere.md --cwd /tmp/avo-loop-work --env-file ../avo/.env.local --attempts-dir /tmp/avo-loop-attempts --loop-json /tmp/avo-loop.json --max-steps 1 --timeout-s 300`
+  passed against a temporary work copy. Anthropic returned `candidate_patch: ""`, selected the
+  existing `candidates/cuda_mma_attention_seed.py` 32-token BF16 score, and the temporary lineage
+  accepted one step with geomean `5.1666931286645514e-05` TFLOPS.
+
+Tradeoffs and decision:
+
+- The loop intentionally repeats the already-safe `evolve-once` unit instead of adding a separate
+  supervisor state machine.
+- Command failures and gate rejections do not stop the loop by themselves. They are recorded to
+  attempts memory and can inform the next prompt until acceptance, cleanup failure, or max-step
+  exhaustion.
+- There is still no no-progress fingerprinting, dynamic stop policy, or full-session planner. Those
+  belong after the one-step substrate has generated enough real attempt history to tune against.
