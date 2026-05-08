@@ -5420,3 +5420,50 @@ Decision:
 Verification:
 
 - Runtime knowledge update passed `git diff --check`.
+
+## 2026-05-08 - Checkpoint 3.82: Accepted warp-row shared-memory skew
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the WMMA BF16 source refresh.
+- Accept only a candidate that passes correctness and improves the current seq256/head_dim128 BF16
+  warp-row lineage score.
+
+Loop result:
+
+- The agent proposed adding one padding column to both staged K and V shared-memory tiles:
+  `k_tiles[kTileKeys][kMaxHeadDim + 1]` and `v_tiles[kTileKeys][kMaxHeadDim + 1]`.
+- The hypothesis was that the original stride of 128 BF16 elements caused shared-memory bank
+  conflicts during V accumulation, and that a one-column skew could reduce those conflicts.
+- The patch applied and scored the existing warp-row BF16 suite at `seq_len=256`, `head_dim=128`,
+  `total_tokens=1024`, `num_heads=4`, both causal modes.
+- The candidate passed correctness and the throughput gate.
+- Nested lineage accepted commit: `259be1d619c58eb1c52faf6fe8e57b16b2121b56`.
+
+Score result:
+
+- Previous best geomean: `0.4012802607933843` TFLOPS.
+- Candidate geomean: `0.43185073056556733` TFLOPS.
+- Noncausal: correct, `max_abs_error=0.001953125`, median `0.8902720212936401 ms`,
+  `0.60304142909027` TFLOPS.
+- Causal: correct, `max_abs_error=0.015625`, median `0.8679999709129333 ms`,
+  `0.3092574481513733` TFLOPS.
+
+Compile verification:
+
+- `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu
+  --out-dir build/warp_shared_skew_accept_verify` succeeded for `sm_86`.
+- BF16 entry point: 48 registers, 1 barrier, 17024 bytes shared memory, no spills.
+- FP16 entry point: 48 registers, 1 barrier, 17024 bytes shared memory, no spills.
+- FP32 entry point: 56 registers, 1 barrier, 33536 bytes shared memory, no spills.
+
+Runtime change:
+
+- Runtime candidate source now carries the accepted shared-memory skew patch.
+- Runtime knowledge records the new accepted best and ptxas resource counts.
+
+Verification:
+
+- `uv run --extra dev pytest`: 150 passed.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
