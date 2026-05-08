@@ -7616,3 +7616,54 @@ Verification:
 - `uv run --extra dev pytest`: passed, 192 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.31: Regressed probability stride-20 guard
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the regressed score-tile skew guard.
+- If a probability-buffer padding candidate passes correctness but regresses throughput, reject it
+  through the lineage gate and record the exact pattern.
+- Preserve the accepted direct-accumulation lineage unless the score improves.
+
+Source refresh:
+
+- Exa refreshed SM80/FlashAttention references before this run. The useful reinforcement was that
+  Ampere paths rely on standard `cp.async`, warp-level MMA, online softmax, register-resident
+  accumulators, and ordinary shared memory; the search did not justify repeating simple
+  shared-memory padding without a better dataflow reason.
+
+Loop result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_score_stride_guard.json`.
+- The planner proposed a stride-20 probability tile:
+  `kProbabilityStride = 20`, `probabilities[kTile][kProbabilityStride]`, 2D probability stores, and
+  PV WMMA load from `&probabilities[0][0]`.
+- The patch applied, scored, and cleanup reverse-applied it successfully.
+- The lineage did not change.
+
+Score result:
+
+- Correctness passed for both causal modes.
+- Geomean regressed to `0.5257029292160739` TFLOPS versus the current best
+  `0.5772885607891738`.
+- Noncausal: max error `0.001953125`, median `0.8048959970474243` ms,
+  `0.6670065623004553` TFLOPS.
+- Causal: max error `0.0078125`, median `0.6478719711303711` ms,
+  `0.41433410914759705` TFLOPS.
+- Gate decision: rejected, reason `candidate regressed geomean throughput`.
+
+Decision:
+
+- Runtime validation now rejects exact stride-20 probability-buffer skew repeats.
+- Runtime knowledge records that simple probability padding remains unhelpful after PV direct
+  accumulation.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 103 tests.
+- `uv run --extra dev pytest`: passed, 193 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
