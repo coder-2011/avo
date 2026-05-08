@@ -4539,3 +4539,40 @@ Verification:
 - Runtime knowledge update passed `git diff --check`.
 - Runtime push/fetch verification: local `main` and `origin/main` both resolved to
   `72facba19d863b51ed6a78e5dc8fe5cbc8743abd`.
+
+## 2026-05-08 - Checkpoint 3.57: Dynamic shared-memory launch wiring gap
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the sm86 shared-memory opt-in guardrails.
+- Capture whether the agent can turn the static-buffer failure into a compile-checkable dynamic
+  shared-memory structural patch.
+
+Loop result:
+
+- The agent proposed moving warp-row K/V staging from static shared arrays to `extern __shared__`.
+- The patch applied cleanly and compiled successfully with
+  `avo compile --source candidates/cuda_warp_rows_attention/attention_kernel.cu --out-dir
+  build/warp_dynamic_smem_check`.
+- Cleanup reverted the patch afterward because compile-only attempts do not enter lineage.
+- The nested lineage head remained `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Compile diagnostics:
+
+- Static shared memory dropped to 512 bytes for Half, BF16, and FP32 entry points.
+- Half/BF16 used 48 registers, FP32 used 56 registers, with no spills.
+
+Decision:
+
+- The compile result is useful, but the generated patch is not scoreable as-is.
+- It did not pass the required dynamic shared-memory byte count in the kernel launch configuration.
+- It set `cudaFuncSetAttribute` only for the BF16 specialization.
+- It computed dynamic shared-memory bytes using BF16 size unconditionally, which is wrong for FP32.
+- Future dynamic-shared patches must wire both the launch third argument and dtype-specific
+  `cudaFuncSetAttribute` values before scoring.
+
+Verification:
+
+- Runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `3316106482b916818a6dc8b42eb564c1625f1afe`.
