@@ -6698,3 +6698,53 @@ Verification:
 - `uv run --extra dev pytest`: passed, 171 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-08 - Checkpoint 4.10: No-op async helper wrapper rejection
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after the scalar async-copy retry feedback.
+- Confirm whether the improved feedback moves the planner away from scalar BF16 async copies.
+- Reject and record no-op async-copy API proofs that do not change real dataflow.
+- Add narrow validation guards for the exact wrapper-only and malformed-signature failure modes.
+
+Loop result:
+
+- The planner no longer retried `sizeof(__nv_bfloat16)` scalar async copies.
+- It instead proposed adding `#include <cuda_pipeline_primitives.h>` and three wrappers:
+  `async_copy_16`, `async_commit`, and `async_wait`.
+- The decision text stated the helpers were unused and that kernel logic was unchanged, so the
+  patch could not affect correctness or throughput.
+- The generated patch also inserted the helper definitions inside the
+  `mma_attention_kernel` signature and duplicated the kernel declaration.
+
+Compile result:
+
+- Command: `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage
+  --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir ./attempts
+  --max-steps 1 --timeout-s 300 --loop-json attempts/loop_after_async_feedback.json`.
+- The patch applied, then `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu
+  --out-dir build/mma_async_header_check` failed.
+- NVCC reported an invalid parameter specifier at the inserted helper, an expected `)`, and
+  undefined `dst_smem` / `src_global` identifiers.
+- Cleanup reverse-applied the transient patch successfully.
+- No score payload was produced and the lineage did not change.
+
+Implementation:
+
+- Runtime validation now rejects non-empty patches whose own text says an async-copy helper is
+  unused.
+- Runtime validation now rejects the wrapper-only `async_copy_16` / `async_commit` / `async_wait`
+  API proof pattern when the wrappers are added but not called.
+- Runtime validation now rejects async helper definitions inserted together with a duplicate
+  `mma_attention_kernel` declaration.
+- Runtime knowledge now records that wrapper-only async-copy API proofs are exhausted; future
+  wrapper patches must be placed before the kernel signature and used in real aligned 16-byte-group
+  dataflow.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py -q`: passed, 85 tests.
+- `uv run --extra dev pytest`: passed, 174 tests.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
