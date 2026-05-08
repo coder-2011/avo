@@ -4256,3 +4256,53 @@ Tradeoffs and decision:
 
 - The successful compile confirms the MMA seed still builds, but it is not evolutionary progress.
 - Future MMA work should patch the wrapper/kernel first, then compile or score that changed source.
+
+## 2026-05-08 - Checkpoint 3.50: Tighten candidate diff hygiene
+
+Success criteria for this checkpoint:
+
+- Run another bounded loop after blocking repeated MMA compile diagnostics.
+- If the next attempt produces a source-changing patch, ensure malformed diffs are rejected cleanly
+  and record the reliability lesson.
+
+Loop result:
+
+- The agent attempted a source-changing head_dim32 MMA patch.
+- The intended direction matched the current knowledge: keep WMMA fragments at 16x16x16, process
+  two 16-wide QK chunks, widen `pv_tile` and `output_acc`, and use PV column offsets like
+  `&pv_tile[chunk * 16]`.
+- The patch was rejected before execution by `git apply --check`.
+- Rejection details: trailing whitespace on two added blank lines and `error: corrupt patch at line
+  160`.
+- No source was modified, no score ran, and the nested lineage head remained
+  `e1ca520057c7172e15ac8d58a9a4e8cb1924e57e`.
+
+Runtime fix:
+
+- Tightened the Anthropic variation prompt and tool schema to say candidate patches must use exact
+  current file context, valid hunk structure, and whitespace-clean added lines.
+- Added prompt/context regression assertions so the guidance stays present.
+- Updated runtime knowledge to record the malformed head_dim32 MMA attempt and recommend smaller,
+  compile-checkable structural slices.
+
+Research refresh:
+
+- Exa found NVIDIA's BF16 Tensor Core GEMM CUDA sample. The relevant takeaways for future MMA work
+  are that Ampere BF16 WMMA uses 16x16x16 fragments, shared-memory skew/padding is used to reduce
+  WMMA load bank conflicts, and CUDA pipeline async copies can reduce register pressure for
+  global-to-shared staging.
+
+Verification:
+
+- `uv run --extra dev pytest tests/test_agent.py`: `50 passed`.
+- `uv run --extra dev pytest`: `137 passed`.
+- `uv run --extra dev ruff check .`: passed.
+- `git diff --check`: passed.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `f87bd9c195a5e5f15e746c29eb71e7988b631cd0`.
+
+Tradeoffs and decision:
+
+- The orchestrator behaved correctly by rejecting the malformed patch without touching the tree.
+- The next MMA attempt should be smaller than the rejected patch, preferably compile-checking only
+  the first structural slice before changing the score shape.
