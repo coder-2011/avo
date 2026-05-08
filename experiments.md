@@ -3922,3 +3922,42 @@ Tradeoffs and decision:
   still not ready to challenge the seq256 warp-row baseline.
 - The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
   `cfe5b45`.
+
+## 2026-05-08 - Checkpoint 3.43: Record malformed MMA widened-row patch
+
+Success criteria for this checkpoint:
+
+- Run one bounded loop after recording the compiled-but-incorrect MMA head-dim32 attempt.
+- Capture whether the next patch fixes the widened output accumulator issue.
+
+Loop result:
+
+- The agent proposed another MMA head-dim32 patch and selected the same bounded score command.
+- Patch validation rejected the raw diff before compile: trailing whitespace and corrupt hunk
+  structure.
+- No score was produced and no lineage commit was created.
+
+CUDA finding:
+
+- The proposed patch did widen both `pv_tile` and `output_acc`, but it also introduced the wrong
+  row-indexing expression `linear / kTile` for widened output loops.
+- For a row-major 16x32 output tile, row stride is the head dimension. Row indexing should use
+  `linear / head_dim` or `linear / kHeadDim`, not `linear / kTile`.
+
+Knowledge update:
+
+- Runtime commit `8efc825 docs: record mma widened-row indexing guard` records this guardrail in
+  `knowledge/ampere.md`.
+
+Verification:
+
+- The runtime knowledge update passed `git diff --check`.
+- Runtime push/fetch verification: local `main` and `origin/main` both resolved to
+  `8efc825e3fe0e6d36d6ae63804d7f881caf28c1f`.
+
+Tradeoffs and decision:
+
+- The failure was patch-formatting, but the proposed indexing would have been a correctness bug even
+  if the diff applied.
+- The current lineage best remains `0.4012802607933843` geomean TFLOPS on nested lineage commit
+  `cfe5b45`.
