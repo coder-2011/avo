@@ -2558,3 +2558,56 @@ Tradeoffs and decision:
 - Candidate extension builds are now CUDA 13 consistent. The first clean build still takes roughly
   one to two minutes on the 4-vCPU host, so agent-loop scoring should keep using small smoke shapes
   unless the extension cache is already warm.
+
+## 2026-05-08 - Checkpoint 3.17: Accepted MMA seed lineage baseline
+
+Success criteria for this checkpoint:
+
+- Run the bounded agent loop through the now-working CUDA candidate extension path.
+- Establish a first accepted lineage score for the Ampere BF16 MMA candidate before asking the
+  agent to modify kernels.
+- Confirm that accepted scored candidates snapshot source artifacts into the nested lineage.
+
+Command:
+
+`uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge
+knowledge/ampere.md --attempts-dir benchmarks/attempts --loop-json benchmarks/latest-loop.json
+--max-steps 1 --timeout-s 300 --env-file ../avo/.env.local`
+
+Agent decision:
+
+- The agent returned no candidate patch and chose to score the existing
+  `candidates/cuda_mma_attention_seed.py` on a 32-token BF16 smoke test.
+- The executed bounded command was:
+  `avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 32
+  --total-tokens 32 --num-heads 1 --head-dim 16 --dtype bf16 --causal both --repeats 1 --warmup 1
+  --timeout-s 300`
+
+Result:
+
+- Gate decision: accepted.
+- Acceptance reason: candidate passed correctness and throughput gate.
+- Previous best geomean: `0.0`.
+- Candidate geomean: `6.23954365882066e-05` TFLOPS.
+- Noncausal case: seq_len 32, BF16, head_dim 16, max_abs_error `0.001953125`,
+  `0.6963520050048828` ms, `9.411332132165034e-05` TFLOPS.
+- Causal case: seq_len 32, BF16, head_dim 16, max_abs_error `0.00390625`,
+  `0.7921280264854431` ms, `4.136705040646883e-05` TFLOPS.
+- Benchmark environment: Torch `2.11.0+cu130`, CUDA `13.0`, Python `3.12.13`,
+  NVIDIA RTX A6000, `sm_86`.
+
+Lineage artifacts:
+
+- Nested lineage commit: `a52d8d7 evolve: accept candidate`.
+- `scores/latest.json` was written.
+- Accepted source snapshots were written under `sources/latest/`:
+  - `candidates/cuda_mma_attention_seed.py`
+  - `candidates/cuda_mma_attention/attention.cpp`
+  - `candidates/cuda_mma_attention/attention_kernel.cu`
+
+Tradeoffs and decision:
+
+- This checkpoint intentionally accepted an unmodified seed because the lineage had no prior best.
+  The useful output is a known-good source snapshot and a concrete baseline gate threshold.
+- Future loop attempts now need to match or improve `6.23954365882066e-05` geomean TFLOPS on the
+  same smoke gate, so regressions should be rejected and cleaned up by the patch cleanup path.
