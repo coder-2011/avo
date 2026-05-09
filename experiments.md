@@ -9919,3 +9919,64 @@ Decision:
 - The KB now contains explicit, useful, retrievable claims rather than only chronological notes.
 - The retrieval layer still needs more source depth, but the current corpus is test-covered enough to
   use safely in the next planner loop.
+
+## 2026-05-09 - Checkpoint 4.76: Add general CUDA grounding to the KB
+
+Success criteria for this checkpoint:
+
+- Move beyond Ampere/search-specific notes and give the planner general CUDA working knowledge.
+- Keep the new material practical: how CUDA works, how CUDA programmers reason, and what mistakes
+  to avoid.
+- Verify that the information is retrievable through the existing `knowledge/ampere.md` entry point.
+
+Runtime change:
+
+- Runtime commit `1240062233177e189a0c2e4d7ef1145a315ac452`
+  (`docs: add general cuda knowledge grounding`) adds `knowledge/b/cuda_general.md`.
+- The new KB file covers:
+  - execution hierarchy: grid, block, thread, warp, SIMT, divergence, and indexing;
+  - memory spaces: global, shared, registers, local memory, constant memory, and cache/shared-memory
+    tradeoffs;
+  - global-memory coalescing, vectorized/aligned access, and redundant read avoidance;
+  - shared-memory staging, synchronization, bank conflicts, and tiling;
+  - occupancy/resource tradeoffs involving block size, registers, shared memory, spills, and ptxas
+    output;
+  - profiling and measurement with correctness first, warmups, repeated samples, medians, and
+    bottleneck classification;
+  - the practical CUDA optimization workflow: hypothesis, measurement, one coherent transform,
+    invariant preservation, and treating regressions as evidence.
+- `knowledge/retrieval_claims.md` now has a `General CUDA Grounding` section with retrievable claims
+  for execution model, memory spaces, coalescing, shared memory, occupancy, and optimization
+  workflow.
+- `knowledge/ampere.md` points planners to `knowledge/b/cuda_general.md` for broad CUDA grounding
+  while keeping itself focused on Ampere/attention/local search evidence.
+- README now documents the split between general CUDA grounding under `knowledge/b/` and
+  Ampere-specific evidence in `knowledge/ampere.md`.
+
+Sources:
+
+- NVIDIA CUDA Programming Guide for SIMT kernels, thread hierarchy, memory spaces, synchronization,
+  coalescing, and shared memory.
+- NVIDIA CUDA C++ Programming Guide for hardware multithreading, resource residency, registers,
+  shared memory, and occupancy.
+- NVIDIA CUDA C++ Best Practices Guide for iterative optimization, timing, shared-memory tiling, and
+  performance measurement.
+- NVIDIA Nsight Compute Kernel Profiling Guide for profiler workflow and metric collection strategy.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_knowledge.py -q`: passed, 21 tests.
+- Manual retrieval:
+  `knowledge-search knowledge/ampere.md --query "CUDA execution model grid block thread warp SIMT divergence memory spaces occupancy profiling workflow" --max-chunks 6 --max-chars 9000`
+  returned `retrieval_claims.md` plus `b/cuda_general.md` chunks covering the execution model,
+  memory spaces, occupancy, profiling, and optimization workflow.
+- `.venv/bin/python -m pytest -q`: passed, 318 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `1240062233177e189a0c2e4d7ef1145a315ac452` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The KB is now less overfit to local CUDA failure history. It has a reusable CUDA mental model that
+  should help the planner form better first hypotheses before relying on Ampere-specific details.
