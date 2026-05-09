@@ -10252,3 +10252,65 @@ Decision:
 - The knowledge base now has broader CUDA background that should help the planner form better
   hypotheses before editing kernels. This is a better root-level improvement than adding more
   reactive phrase bans around individual failed attempts.
+
+## 2026-05-09 - Checkpoint 4.81: Ensure agent receives CUDA practice context
+
+Success criteria for this checkpoint:
+
+- Fix the agent-side path, not only the documentation path.
+- Verify that the live planning context retrieves the broad CUDA practice content from
+  `knowledge/b/cuda_programming_practice.md`.
+- Keep the change minimal and scoped to planner-context construction and retrieval tests.
+
+Issue:
+
+- After checkpoint 4.80, `knowledge/b/cuda_programming_practice.md` existed and its targeted
+  retrieval tests passed, but the actual agent planning context still did not include it under the
+  current lineage/attempt/repo query.
+- Direct check before the fix:
+  - command constructed `_planning_context(...)` for the live runtime repo;
+  - result: `"b/cuda_programming_practice.md" in knowledge` was `False`;
+  - the top retrieved chunks were dominated by high-frequency local lineage and attempt-history terms.
+
+Runtime change:
+
+- Runtime commit `b397fd400a278afc0956a0adc0ee41a480c874ea`
+  (`fix: include cuda practice in agent context`) adds a stable broad-CUDA practice retrieval anchor
+  in `avo/cli.py`.
+- `_planning_context` now builds the normal dynamic context first, then appends a bounded
+  supplemental broad CUDA practice context only if the normal retrieval did not already include
+  `b/cuda_programming_practice.md`.
+- The supplemental retrieval uses section-heading terms, so it retrieves the actual practice content
+  such as `# CUDA Kernel Design Practice`, `The Basic Mental Model`, `Decomposing Work`, and
+  `Semantic Transform Guidance For The Planner`, rather than only the manifest/query-list chunk.
+- This keeps the agent grounded in general CUDA practice while preserving the existing local
+  lineage/attempt-history retrieval.
+
+Verification:
+
+- Live planning-context check after the fix:
+  - `"b/cuda_programming_practice.md" in knowledge`: `True`;
+  - `"CUDA Kernel Design Practice" in knowledge`: `True`;
+  - supplemental broad CUDA practice context starts after the normal dynamic context and contains the
+    actual guidance that a CUDA design starts from thread/warp/block work ownership.
+- Focused tests:
+  `.venv/bin/python -m pytest tests/test_cli.py::test_planning_context_includes_general_cuda_practice tests/test_knowledge.py::test_agent_planning_query_retrieves_cuda_practice_context -q`
+  passed, 2 tests.
+- `.venv/bin/python -m pytest -q`: passed, 338 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `b397fd400a278afc0956a0adc0ee41a480c874ea` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Source/provenance note:
+
+- Exa search during this checkpoint again surfaced the same official NVIDIA references as the right
+  source class for this fix: CUDA Programming Guide SIMT kernels, CUDA Best Practices Guide, Nsight
+  Compute guide, and Ampere tuning guide. No new external implementation pattern was copied.
+
+Decision:
+
+- This closes the specific gap where useful general CUDA knowledge existed locally but was not
+  reaching the agent under realistic planning queries. The next useful check is to run another bounded
+  evolve loop and see whether the planner uses this context to produce a coherent CUDA transform
+  instead of falling back to prose or narrow historical fixes.
