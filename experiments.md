@@ -10921,3 +10921,89 @@ Decision:
 - Widening the MMA query tile is still a plausible direction, but not as a constants/buffer-only
   transform. A correct wider tile needs explicit second 16-row sub-tile MMA, softmax, and output
   dataflow. Otherwise rows are uncovered.
+
+## 2026-05-09 - Checkpoint 4.92: Add edit self-repair and fix score-worker environment
+
+Success criteria for this checkpoint:
+
+- Let the evolve loop repair its own executable edit failures instead of only recording them.
+- Keep CUDA evolution on structured semantic transforms rather than raw CUDA diffs or prose edits.
+- Run a longer loop budget (`--max-steps 40`, `--timeout-s 2400`, `--compile-repair-attempts 6`) and
+  verify whether scoring and repair work on realistic long-sequence lanes.
+
+Runtime fixes:
+
+- Added compile self-repair in `avo/cli.py`/`avo/evolve.py`:
+  - compile failures from applied candidate edits are reverted;
+  - compiler stderr/stdout plus the failed edit payload are fed back as an immediate repair request;
+  - the repair decision must contain a revised executable edit payload, not a no-edit retry.
+- Added structured-transform materialization self-repair:
+  - repairable anchor/match failures now trigger an immediate repair request with the rejected
+    transform JSON and materialization error;
+  - unchanged payload retries and prose-only repairs are rejected.
+- Hardened pending compile-only transform follow-up:
+  - score-shaped planner outputs now get the exact pending `candidate_transform` attached even when
+    the planner omits or malforms the field;
+  - compile-only transforms with failed cleanup are no longer treated as valid pending transforms.
+- Fixed candidate scoring environment:
+  - score workers now prepend the active Python environment's `bin` directory to `PATH`, so PyTorch
+    can find `.venv/bin/ninja`;
+  - score failures caused by infrastructure errors such as missing Ninja are classified as
+    `score_environment_error` instead of CUDA correctness failures.
+- Added small semantic transform recovery:
+  - "thread count" retunes map to `set_constexpr_int(..., name="kThreads")`;
+  - "changing/widening/narrowing kTile from X to Y" is parsed as a constant transform rather than a
+    missing-payload prose edit.
+
+Runtime loop observations:
+
+- `attempts/2026-05-09T18-58-57-00-00.json`:
+  - K shared-memory staging compiled cleanly (`14016 bytes smem`, `40 registers`, no spills);
+  - cleanup succeeded, leaving the transform pending for score.
+- `attempts/2026-05-09T19-04-13-00-00.json`:
+  - the pending K-staging transform was scored before the score-worker environment fix;
+  - it was falsely marked `all_correct=false` because the first case failed with
+    `Ninja is required to load C++ extensions`.
+- Manual score after the environment fix:
+  - `avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 4096 ...`
+    passed with `all_correct=true`;
+  - the two 4096 cases measured `11.39 TFLOPS` noncausal and `5.39 TFLOPS` causal, geomean
+    `7.83 TFLOPS`.
+- `attempts/2026-05-09T19-19-41-00-00.json` then
+  `attempts/2026-05-09T19-22-08-00-00.json`:
+  - the loop compiled a repaired K-only staging transform and scored it on
+    `4096,8192,16384,32768`;
+  - the score was now valid (`all_correct=true`, no environment errors);
+  - geomean was `4.16 TFLOPS`, rejected only for throughput regression against best candidate
+    geomean `7.78 TFLOPS`.
+- `attempts/2026-05-09T19-30-33-00-00.json`:
+  - compile self-repair fired on a row-major K WMMA idea;
+  - the repair correctly identified that Ampere BF16 WMMA does not support that row-major `matrix_b`
+    shape/layout contract and pivoted back toward shared K staging;
+  - the next repair failed materialization on an ambiguous anchor and then dropped the payload.
+- The loop still sometimes falls back to prose-only CUDA edits or unsupported profiler requests.
+  These are now classified and rejected earlier, but the planner still needs better supported
+  diagnostic tools or stronger transform repair behavior to avoid repeated planning churn.
+
+Verification:
+
+- Focused runtime tests for the new behavior passed:
+  - compile self-repair;
+  - structured-transform materialization repair;
+  - pending transform payload normalization;
+  - score-worker Ninja PATH handling;
+  - score environment-error classification;
+  - thread-count and `kTile` semantic constant inference.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 363 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- The loop is now genuinely repairing some of its own edit failures. It no longer just records a
+  compiler error and waits for a human patch.
+- The current best validated kernel is still the prior seed lane; K shared-memory staging is correct
+  but slower on the long-sequence target lane.
+- The next root issue is planner behavior around unsupported diagnostics and prose-only repairs, not
+  CUDA compilation or score infrastructure.
