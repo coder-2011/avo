@@ -9427,3 +9427,67 @@ Decision:
   transformations without serializing them into the structured transform channel.
 - The next implementation work should improve semantic transform construction or planner feedback,
   not add another CUDA mistake phrase guard.
+
+## 2026-05-09 - Checkpoint 4.68: Require scoped semantic edit modes
+
+Success criteria for this checkpoint:
+
+- Stop treating "small tool calls" as tiny text edits.
+- Force the planner to choose an explicit edit channel: structured transform, legacy non-CUDA raw
+  patch, or no-edit diagnostic.
+- Verify that the loop can recover from a structural CUDA preflight failure into a materialized
+  semantic transform and then score the exact pending transform.
+
+Runtime change:
+
+- Runtime commit `9248a6da70b011e738e9f01ad98471432991378f` adds required `edit_mode` values:
+  `transform`, `legacy_patch`, and `no_edit`.
+- Missing `edit_mode` is still inferred for backward-compatible stored attempts, but new strict tool
+  calls must select the channel explicitly.
+- `transform` mode now rejects prose-only CUDA changes and requires `candidate_transform`.
+- Explicit `no_edit` mode now requires `candidate_edit` to start with `No edit;`.
+- Prompt/schema language was changed from tiny textual operations to scoped semantic moves:
+  primitive transform steps are materialization details, and the unit of search is the smallest
+  coherent transformation that preserves invariants and can be validated.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 225 tests.
+- `.venv/bin/python -m pytest`: passed, 288 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `9248a6da70b011e738e9f01ad98471432991378f` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_explicit_edit_mode.json --timeout-s 900 --env-file ../avo/.env.local`
+- Step 1 proposed a coherent cp.async K-staging semantic batch, but structural preflight rejected it
+  as `async_copy_granularity` because it used scalar BF16 async copies.
+- Step 2 corrected the same transform family into 16-byte grouped async copies. The structured batch
+  materialized, passed preflight, and compiled:
+  `avo compile --source candidates/cuda_mma_attention/attention_kernel.cu --out-dir build/mma_k_async`.
+- The compile used 40 registers and 18112 bytes shared memory. No candidate was accepted because the
+  loop stopped at `max_steps` before scoring.
+
+Follow-up score:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 1 --loop-json attempts/loop_after_explicit_edit_mode_score.json --timeout-s 900 --env-file ../avo/.env.local`
+- The next planner step obeyed the pending-transform contract and scored the exact compiled
+  `candidate_transform` on the full target lane:
+  `seq_lens 4096,8192,16384,32768`, `total_tokens 32768`, `num_heads 16`, `head_dim 128`, BF16,
+  both causal modes.
+- The candidate failed correctness in all 8 cases with `RuntimeError: candidate output contains
+  non-finite values`, so geomean was `0.0` TFLOPS and the gate rejected it against the current best
+  `7.283505507996481` TFLOPS.
+
+Decision:
+
+- This did not improve throughput, but it is the first loop in this sequence to turn a structural
+  preflight class into a corrected structured CUDA transform, compile it, and force the follow-up
+  score of the exact pending transform.
+- The next search work should classify the non-finite cp.async K-staging failure as a transform
+  family issue, likely around buffer swapping/wait ordering or incomplete current-buffer update,
+  rather than adding another prompt phrase.
