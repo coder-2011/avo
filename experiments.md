@@ -10577,3 +10577,56 @@ Decision:
   This reinforces the earlier staging lesson: future work should not add standalone shared-memory
   Q tiles. Useful next directions are broader Q/K/V layout/copy-pipeline changes, K/V staging with
   real overlap, or a different work distribution that attacks the FA2 gap more directly.
+
+## 2026-05-09 - Checkpoint 4.86: Add FA2 SM80 staging cue
+
+Success criteria for this checkpoint:
+
+- Do a fresh external source check after the repaired Q-staging regression.
+- Add only useful information that changes future search behavior.
+- Verify the new claim is retrievable by the planner.
+
+Research:
+
+- Exa query:
+  `FlashAttention v2 Ampere SM80 forward kernel cp.async Q K V shared memory staging ldmatrix online softmax GitHub CUTLASS Dao-AILab implementation details`
+- Primary source fetched:
+  https://github.com/Dao-AILab/flash-attention/blob/3387de49/csrc/flash_attn/src/flash_fwd_kernel.h
+- Useful finding:
+  - FA2's SM80 forward kernel constructs `sQ`, `sK`, and `sV` shared-memory tensors with tiled copy
+    layouts.
+  - It can share Q/K shared memory with `Share_Q_K_smem`.
+  - It can copy Q from shared memory into MMA register fragments when `Is_Q_in_regs` is active.
+  - K and V are advanced through `cp.async` copy/fence/wait phases around QK/PV work.
+- Interpretation:
+  - The local `q_shared` regression is consistent with FA2's structure: "put Q in shared" alone is
+    not the optimization. Q staging has to be coupled to swizzled shared layouts, smem-to-register
+    copies, and the K/V async pipeline.
+
+Runtime knowledge update:
+
+- Runtime commit `d2afffbcafff682fe02dc94e1663965ed3e73f8e`
+  (`docs: add fa2 sm80 staging cue`) updates:
+  - `knowledge/ampere.md`;
+  - `knowledge/retrieval_claims.md`;
+  - `tests/test_knowledge.py`.
+- New retrieval query:
+  `FlashAttention SM80 Q in regs Share_Q_K_smem cp_async K V pipeline q_shared regression`.
+- Why useful:
+  - steers the planner away from another isolated synchronous `q_shared` transform;
+  - points toward Q-in-register reuse, K/V async pipeline structure, or broader Q/K/V layout changes.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_knowledge.py -q`: passed, 37 tests.
+- `.venv/bin/python -m pytest -q`: passed, 345 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `d2afffbcafff682fe02dc94e1663965ed3e73f8e` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The next loop should be biased toward FA2-like dataflow coupling: Q register reuse and/or K/V
+  async copy-pipeline work. A standalone Q shared-memory tile is now recorded as a confirmed
+  negative family.
