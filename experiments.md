@@ -9316,3 +9316,45 @@ Verification:
 - `git diff --check`: passed in the runtime repo.
 - Runtime commit `2b2542711631db5482f42f606971327b9e4cc55c` was pushed and fetch-verified on
   `coder-2011/avo-ampere`.
+
+## 2026-05-09 - Checkpoint 4.65: Reframe transforms as semantic moves
+
+Success criteria for this checkpoint:
+
+- Correct the overly literal interpretation of "small tool calls" as tiny textual edits.
+- Preserve deterministic primitive transform materialization while making the candidate unit a
+  scoped, coherent semantic move.
+- Prevent header-only/helper-only CUDA support edits from becoming standalone optimization
+  candidates or pending follow-up scores.
+
+Observation:
+
+- The `add_include` transform from checkpoint 4.63 was useful as a primitive, but accepting it as a
+  standalone candidate repeated the same underlying problem in a new form: the loop could make and
+  validate a tiny textual change with no semantic value.
+- The better rule is: make the smallest coherent transformation that preserves invariants and can
+  be validated. "Small" means scoped, reviewable, recoverable, and tied to a clear hypothesis; it
+  does not mean the smallest possible source hunk.
+
+Decision:
+
+- Runtime commit `0b70de7` keeps `add_include` as a primitive step, but marks it as support-only.
+- Standalone support-only transforms are rejected. `add_include` may only appear in a semantic
+  batch with a real dataflow or validation-contract change that uses it.
+- The prompt, repo context, and retry feedback now talk about small coherent transformations and
+  primitive steps as representation details, not as the optimization objective.
+- Attempt history no longer treats a support-only compile as a pending transform that should be
+  scored. Such attempts remain visible as compile-only diagnostics, but they do not drive a bogus
+  follow-up score.
+- Planning failures from support-only transforms are classified as
+  `planning_support_only_transform` so the failure mode is visible without adding another phrase
+  blacklist.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 219 tests.
+- `.venv/bin/python -m pytest`: passed, 282 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `0b70de7db13a2dca53b8479a350edce6279c932f` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
