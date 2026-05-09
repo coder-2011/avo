@@ -10495,3 +10495,85 @@ Decision:
   syntax or raw diffs; it is the planner's ability to repair structured transform anchors. The next
   bounded loop should test whether the explicit repair signal causes the agent to retry Q staging
   with unique anchors instead of prose-only planning.
+
+## 2026-05-09 - Checkpoint 4.85: Score repaired Q-staging transform
+
+Success criteria for this checkpoint:
+
+- Test whether the anchor-repair signal causes the agent to repair the Q-staging transform.
+- Score the compiled transform if the repair compiles.
+- Record the performance result as search evidence.
+
+Loop 1:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_anchor_repair_signal.json --timeout-s 900 --env-file ../avo/.env.local`
+- Result: no accepted candidate; `completed_steps=2`, `stopped_reason=max_steps`.
+- Step 1 repaired the Q-staging transform with unique anchors and compiled successfully.
+- Compile result:
+  - no spills;
+  - 40 registers;
+  - 1 barrier;
+  - 14016 bytes shared memory;
+  - ptxas compile time about 109 ms.
+- The compile-only patch was cleaned up as expected.
+- Step 2 attempted to score the compiled transform but omitted `candidate_transform`; planning
+  validation failed after three retries.
+
+Runtime change after loop 1:
+
+- Runtime commit `829f806df9f259fe151d822cffbb81499f6faef0`
+  (`fix: clarify compiled transform scoring`) updates the prompt and follow-up signal.
+- The follow-up signal now explicitly says compile-only patches are cleaned up before follow-up
+  scoring, so a `no_edit` score would score the unmodified seed.
+- It tells the planner to include the same `candidate_transform` again with
+  `edit_mode=transform` and `candidate_patch=""`.
+- Verification for that commit:
+  - focused prompt/follow-up tests passed, 2 tests;
+  - `.venv/bin/python -m pytest -q`: passed, 343 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed;
+  - pushed and fetch-verified on `coder-2011/avo-ampere`.
+
+Loop 2:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 1 --loop-json attempts/loop_after_compiled_transform_score_hint.json --timeout-s 900 --env-file ../avo/.env.local`
+- Result: no accepted candidate; `completed_steps=1`, `stopped_reason=max_steps`.
+- The agent copied the pending Q-staging `candidate_transform` and scored the full target suite.
+- Correctness: passed all 8 BF16 full-target cases.
+- Geomean: `6.686302249012325` TFLOPS.
+- Previous best: `7.777584666360881` TFLOPS.
+- Gate: rejected for geomean regression.
+- Per-case TFLOPS:
+  - noncausal seq4096: `9.127144768610787`;
+  - causal seq4096: `4.982410524364561`;
+  - noncausal seq8192: `9.47602063778509`;
+  - causal seq8192: `4.9226662010673605`;
+  - noncausal seq16384: `9.231988362377242`;
+  - causal seq16384: `4.778746088236129`;
+  - noncausal seq32768: `9.257353783003765`;
+  - causal seq32768: `4.610957708435425`.
+
+Runtime knowledge update:
+
+- Runtime commit `8d35171d6df859a690ae7ff4593bf2306e1047b6`
+  (`docs: record q staging regression`) records the Q-staging result in
+  `knowledge/ampere.md` and `knowledge/retrieval_claims.md`.
+- The new claim is tested by retrieval query:
+  `q_shared Q staging repaired anchors geomean 6.686302249012325 shared memory 14016`.
+- Verification for that commit:
+  - `.venv/bin/python -m pytest tests/test_knowledge.py -q`: passed, 36 tests;
+  - `.venv/bin/python -m pytest -q`: passed, 344 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed;
+  - pushed and fetch-verified on `coder-2011/avo-ampere`.
+
+Decision:
+
+- The agent loop is now capable of repairing a structured CUDA transform, compiling it, and scoring
+  the exact compiled transform after cleanup. That is real progress on the agent loop.
+- The CUDA result itself is negative: isolated synchronous Q staging is correct but materially slower.
+  This reinforces the earlier staging lesson: future work should not add standalone shared-memory
+  Q tiles. Useful next directions are broader Q/K/V layout/copy-pipeline changes, K/V staging with
+  real overlap, or a different work distribution that attacks the FA2 gap more directly.
