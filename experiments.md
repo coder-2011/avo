@@ -9399,3 +9399,31 @@ Verification:
 - `git diff --check`: passed in the runtime repo.
 - Runtime commit `70f04ddf33941b6faa96c779238b9cb74569d1e3` was pushed and fetch-verified on
   `coder-2011/avo-ampere`.
+
+## 2026-05-09 - Checkpoint 4.67: Post-replacement loop still needs semantic transform payloads
+
+Success criteria for this checkpoint:
+
+- Run a short live loop after adding exact replacement recovery.
+- Verify whether the planner now reaches materialized semantic transforms.
+- Record the remaining failure mode honestly if it does not.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_exact_replacement_recovery.json --timeout-s 900 --env-file ../avo/.env.local`
+- The loop produced no accepted candidate and executed no local compile or score command.
+- Step 1 failed planning validation after the planner described a broad K shared-memory staging
+  transformation but still omitted `candidate_transform`/`candidate_patch`.
+- Step 2 failed planning validation after the planner proposed a header/include availability step
+  for future async-copy dataflow. Under checkpoint 4.65 this is support-only unless batched with a
+  real semantic dataflow or validation-contract change.
+
+Decision:
+
+- No runtime code was changed for this checkpoint. The exact-replacement recovery works for exact
+  source-to-source prose, but this loop did not produce that shape.
+- The remaining gap is broader than one phrase: the planner is still describing coherent CUDA
+  transformations without serializing them into the structured transform channel.
+- The next implementation work should improve semantic transform construction or planner feedback,
+  not add another CUDA mistake phrase guard.
