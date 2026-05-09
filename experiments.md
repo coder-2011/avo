@@ -9267,3 +9267,52 @@ Verification:
 - `git diff --check`: passed in the runtime repo.
 - Runtime commit `5ed61be111f034d12d8f886245673db4f452bb32` was pushed and fetch-verified on
   `coder-2011/avo-ampere`.
+
+## 2026-05-09 - Checkpoint 4.64: Require pending transform on follow-up scores
+
+Success criteria for this checkpoint:
+
+- Run one bounded post-repair loop under the new structured-transform interface.
+- Capture any remaining loop-control gap exposed by the run.
+- Prevent the agent from claiming it is scoring a compiled transform while actually scoring the
+  unmodified candidate.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_transform_planning_repair_commit.json --timeout-s 900 --env-file ../avo/.env.local`
+- The loop did not produce an accepted candidate.
+- Step 1 scored the full target candidate lane with `trials=1`, all cases correct, geomean
+  `7.196038438735886` TFLOPS. The gate rejected it against the prior candidate geomean
+  `7.283505507996481`.
+- Step 2 failed planning validation because the planner tried another recorded environment
+  stability diagnostic.
+- Step 3 scored the full target lane again with `trials=3`, all cases correct, geomean
+  `7.258262928778019` TFLOPS. The gate again rejected it against `7.283505507996481`.
+
+Observation:
+
+- The planner described these scores as follow-up scores for the compiled `add_include` transform,
+  but the decisions omitted the pending `candidate_transform`.
+- Because the compile-only patch had been cleaned up, omitting the transform meant the loop was just
+  rescoring the unmodified MMA seed. This is exactly the kind of search-loop waste the prompt
+  critique called out: it passes harness validation but does not advance kernel evolution.
+
+Decision:
+
+- Runtime commit `2b25427` updates attempt-history validation so a score following a successful
+  compile-only transform must include the exact pending `candidate_transform` JSON from the
+  follow-up signal.
+- If the agent omits it, the step is rejected as `planning_missing_pending_transform` rather than
+  running a misleading no-edit candidate score.
+- A different transform family is still allowed, but it has to be represented as an actual
+  `candidate_transform` or legacy non-CUDA patch.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 59 tests.
+- `.venv/bin/python -m pytest`: passed, 278 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `2b2542711631db5482f42f606971327b9e4cc55c` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
