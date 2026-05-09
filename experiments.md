@@ -10836,3 +10836,28 @@ Decision:
 - The synchronous K/V staging family remains unattractive. The next loop should move away from
   immediate shared staging toward a real async/copy-layout/register-pipeline step or a wider
   FA2-like tile/work decomposition.
+
+## 2026-05-09 - Checkpoint 4.90: Post compile-contract loop
+
+Success criteria for this checkpoint:
+
+- Run a short loop after aligning `avo compile` with score-time extension flags.
+- Check whether the next failure appears at compile/score time or earlier in planning.
+
+Runtime loop:
+
+- Runtime loop file: `attempts/loop_after_compile_contract_fix.json`.
+- Result: no accepted candidate.
+- Step 1 failed planner validation because the returned decision omitted required fields:
+  `expected_effect`, `risk`, and `next_command`.
+- Step 2 failed planner validation because the agent proposed increasing `kThreads` from 128 to 256
+  in prose without a `candidate_transform` or patch payload.
+- No compile or score command ran in this loop, so it did not exercise the stricter compile flags.
+
+Decision:
+
+- The compile-contract fix remains valid and verified, but this loop surfaced planner-format drift
+  rather than a kernel result.
+- The recent-attempt supervisor signal now says the last five attempts produced no accepted
+  candidate. The next useful action is a strategy reset toward a different Ampere optimization
+  family, not another synchronous shared-memory staging attempt or thread-count prose edit.
