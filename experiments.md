@@ -9600,3 +9600,62 @@ Decision:
 - This was loop-state debt exposed by the post-preflight run, not a CUDA search result.
 - The next loop should now be free to choose a new scored transform family without being blocked by
   an old compile-only transform that was superseded by a later score attempt.
+
+## 2026-05-09 - Checkpoint 4.71: Accept smaller MMA block candidate
+
+Success criteria for this checkpoint:
+
+- Re-run the loop after clearing stale pending-transform state.
+- Accept only a candidate that passes correctness on the full target lane and beats the current best
+  geomean.
+- Commit the accepted runtime source state and record lineage evidence.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_stale_pending_fix.json --timeout-s 900 --env-file ../avo/.env.local`
+- The loop stopped after one accepted candidate.
+- Candidate transform:
+  `set_constexpr_int` on `candidates/cuda_mma_attention/attention_kernel.cu`, changing
+  `kThreads` from `256` to `128`.
+- Hypothesis: the MMA kernel uses one warp for tensor-core math, so reducing the block from 256 to
+  128 threads may reduce inactive thread overhead while preserving enough parallelism for
+  cooperative loads/shared-memory initialization.
+
+Score result:
+
+- Command:
+  `avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 4096,8192,16384,32768 --total-tokens 32768 --num-heads 16 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --timeout-s 300`
+- Correctness: passed all 8 full-target BF16 cases.
+- Geomean: `7.777584666360881` TFLOPS.
+- Previous best: `7.283505507996481` TFLOPS.
+- Gate decision: accepted, "candidate passed correctness and throughput gate".
+- Per-case TFLOPS:
+  - noncausal seq4096: `11.52054882841778`
+  - causal seq4096: `5.459380958407761`
+  - noncausal seq8192: `11.502745847543771`
+  - causal seq8192: `5.3376604472323566`
+  - noncausal seq16384: `11.273997007570372`
+  - causal seq16384: `5.301768635035056`
+  - noncausal seq32768: `11.123740467635363`
+  - causal seq32768: `5.214821039250831`
+
+Commits:
+
+- Nested lineage commit: `cb558aa` (`evolve: accept candidate`), no remote configured for
+  `/home/ubuntu/avo-ampere/lineage`.
+- Runtime commit `3ab4a57a1ea679171950df239bb5cacf0b345154` applies the accepted `kThreads=128`
+  source state and was pushed/fetch-verified on `coder-2011/avo-ampere`.
+
+Verification:
+
+- `.venv/bin/python -m pytest -q`: passed, 292 tests after applying the accepted source state.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- This is a modest but real improvement, roughly `+6.78%` over the previous candidate geomean.
+- It remains far below FA2 (`~109.8` TFLOPS recorded earlier), so the search should continue toward
+  deeper Ampere dataflow and tiling changes. This checkpoint only establishes a better accepted
+  baseline for subsequent agent iterations.
