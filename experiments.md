@@ -10314,3 +10314,69 @@ Decision:
   reaching the agent under realistic planning queries. The next useful check is to run another bounded
   evolve loop and see whether the planner uses this context to produce a coherent CUDA transform
   instead of falling back to prose or narrow historical fixes.
+
+## 2026-05-09 - Checkpoint 4.82: Reject unsupported score-as-profile plans
+
+Success criteria for this checkpoint:
+
+- Run a bounded loop after the CUDA-practice context fix.
+- Classify what the agent actually did with the fixed context.
+- Fix any controllable agent-interface issue exposed by that loop.
+
+Loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_cuda_practice_context.json --timeout-s 900 --env-file ../avo/.env.local`
+- Result: no accepted candidate; `completed_steps=3`, `stopped_reason=max_steps`.
+- Step 1:
+  - The agent used the broader CUDA-practice framing and correctly asked to classify the bottleneck
+    before adding async/staging complexity.
+  - The invalid part: it claimed it would profile memory bandwidth, tensor-core utilization,
+    occupancy, and instruction mix, but the bounded command was only `avo score`.
+  - `avo score` can measure correctness, timing, and TFLOPS; it does not run Nsight or collect
+    profiler metrics.
+  - The score passed correctness but was a no-edit full-target rerun and regressed versus the best:
+    geomean `7.74684311206423` TFLOPS versus best `7.777584666360881`.
+- Step 2:
+  - Planning failed after three retries because the agent repeated a recorded no-patch compile
+    diagnostic instead of attaching a `candidate_transform` or scoring a pending compiled transform.
+- Step 3:
+  - Planning failed after three retries because the agent described a Q shared-memory staging edit in
+    prose but did not serialize the required `candidate_transform`.
+
+Runtime change:
+
+- Runtime commit `412e751cab081629b094aaabfa362441d87bc0e0`
+  (`fix: reject unsupported score profiling plans`) tightens the agent validation.
+- `avo score` plans are now rejected if the planning text asks for profiler-only evidence such as
+  memory bandwidth, occupancy, scheduler behavior, instruction mix, roofline, stalls, bank conflicts,
+  or tensor-core utilization.
+- The validation error now explains that `avo score` reports correctness, timing, and TFLOPS only.
+- The recorded no-patch compile feedback now tells the planner to score the exact pending compiled
+  transform or include a source-changing `candidate_transform`, not to score/compile the unmodified
+  seed again.
+- The full target-suite no-edit MMA score
+  `seq_lens=4096,8192,16384,32768 / total_tokens=32768 / num_heads=16 / head_dim=128`
+  is now treated as a recorded unpatched seed score, so the loop should not spend another step
+  remeasuring the same accepted candidate without a transform.
+
+Verification:
+
+- Focused tests:
+  `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_rejects_score_claiming_profiler_metrics tests/test_agent.py::test_parse_variation_decision_rejects_recorded_unpatched_mma_target_suite_score tests/test_agent.py::test_decision_feedback_explains_recorded_no_patch_compile_error tests/test_agent.py::test_decision_feedback_explains_score_profiler_metric_error -q`
+  passed, 4 tests.
+- Related evolve classification tests:
+  `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_classifies_planning_validation_failure tests/test_evolve.py::test_summarize_attempt_history_does_not_fingerprint_different_planning_errors -q`
+  passed, 2 tests.
+- `.venv/bin/python -m pytest -q`: passed, 341 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `412e751cab081629b094aaabfa362441d87bc0e0` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The broad CUDA context changed the agent's reasoning in the right direction, but the action channel
+  was still too permissive: it allowed a score command to masquerade as profiling. The fixed validator
+  keeps the loop honest about what evidence each command can actually produce and should push the next
+  loop toward either a real `candidate_transform` or a genuinely supported diagnostic.
