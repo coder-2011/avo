@@ -9714,3 +9714,59 @@ Decision:
 - The next planner step should either make a constant-only hypothesis about the current invariant or
   materialize the full coherent dataflow change it claims, then validate it on the realistic target
   lane.
+
+## 2026-05-09 - Checkpoint 4.73: Reject smaller MMA block retune
+
+Success criteria for this checkpoint:
+
+- Refresh the planner knowledge with Ampere FA2/CUTLASS cues before another loop.
+- Run a bounded loop after the semantic-transform alignment fix.
+- Treat a clean full-target rejection as search evidence, not a framework failure.
+
+Research refresh:
+
+- Exa found NVIDIA CUTLASS's Ampere FlashAttention v2 example, which uses 128x128 M/N tiles,
+  128 threads, 16-byte contiguous alignment, Q/K/V shared-memory staging through `cp.async`,
+  swizzled shared-memory layouts, Ampere tensor-core MMA, and integrated online softmax.
+- Exa also surfaced FlashAttention SM80 kernel code where `NumThreads` is derived from the tiled
+  MMA shape and used for launch/scheduling decisions. This reinforced the current interface rule:
+  a thread-count constant retune is valid as a constant retune, but not as a proxy for unimplemented
+  multi-query-tile or split-work dataflow.
+- Runtime commit `abfdeb6fcb4280fac71c89ae84fe277020ffc6e1`
+  (`docs: refresh ampere semantic search cues`) added this note to `knowledge/ampere.md` and was
+  pushed/fetch-verified on `coder-2011/avo-ampere`.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_semantic_alignment.json --timeout-s 900 --env-file ../avo/.env.local`
+- Step 1 compiled a `set_constexpr_int` transform changing `kThreads` from `128` to `64`.
+- Compile diagnostics: sm86 compile passed, 40 registers, 1 barrier, 9920 bytes shared memory,
+  0 spill stores, and 0 spill loads.
+- Step 2 scored the same `kThreads=64` transform on the full target lane with three timing trials.
+
+Score result:
+
+- Correctness: passed all 8 full-target BF16 cases.
+- Geomean: `7.587127963961811` TFLOPS.
+- Previous best: `7.777584666360881` TFLOPS.
+- Gate decision: rejected, "candidate regressed geomean throughput".
+- Per-case TFLOPS:
+  - noncausal seq4096: `11.369773348943326`
+  - causal seq4096: `5.397254654447017`
+  - noncausal seq8192: `11.165628592873695`
+  - causal seq8192: `5.2817504078010975`
+  - noncausal seq16384: `11.040690799210282`
+  - causal seq16384: `5.120668906329017`
+  - noncausal seq32768: `10.764721410572763`
+  - causal seq32768: `4.985489019182219`
+
+Decision:
+
+- The loop behaved correctly after the semantic-alignment fix: it made a coherent constant retune,
+  compiled it, scored the exact transform, and rejected a throughput regression without leaving the
+  worktree dirty.
+- The result weakens the "fewer idle threads improves occupancy" hypothesis for this seed. The next
+  search step should move away from block-size retuning and toward an actual Ampere dataflow change,
+  preferably one that borrows a narrower piece of FA2/CUTLASS structure such as swizzled shared
+  layout, Q/K/V copy granularity, or a real tiled-MMA work distribution.
