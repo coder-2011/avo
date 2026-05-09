@@ -10434,3 +10434,64 @@ Decision:
   actually produce: `score` cannot pretend to be profiling, and `env` cannot pretend to inspect
   source. This is still not a performance breakthrough, but it is a root-level agent fix rather than
   another CUDA phrase ban.
+
+## 2026-05-09 - Checkpoint 4.84: Surface transform anchor repair signal
+
+Success criteria for this checkpoint:
+
+- Run a follow-up loop after the env/source-inspection guard.
+- Verify whether the agent now reaches a real structured CUDA transform.
+- If transform materialization fails, improve the repair signal rather than adding another narrow
+  phrase ban.
+
+Loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_env_source_guard.json --timeout-s 900 --env-file ../avo/.env.local`
+- Result: no accepted candidate; `completed_steps=2`, `stopped_reason=max_steps`.
+- Step 1:
+  - The agent produced a real semantic CUDA transform: stage the full 16x128 Q tile cooperatively
+    into shared memory once per CTA, then load WMMA Q fragments from `q_shared` instead of global Q.
+  - This is directionally useful: it is a coherent Q-staging move tied to reuse/global-memory
+    traffic, not a raw CUDA diff, not a fake profiler call, and not an env/source-inspection step.
+  - Materialization failed before compile because the transform used `anchor: "  __syncthreads();"`
+    for `insert_after_once`, which matched five locations: lines 54, 84, 121, 127, and 155.
+- Step 2:
+  - The agent tried to continue the same Q-staging idea, but fell back to prose and omitted
+    `candidate_transform`, causing planning validation failure.
+
+Runtime change:
+
+- Runtime commit `afaecd537b4e1967b379ccea018291ac21f94d3a`
+  (`fix: surface transform anchor repair signal`) improves attempt-history follow-up.
+- When the latest semantic `candidate_transform` fails materialization because a
+  `replace_once`/`insert_*_once` anchor or match is ambiguous, the summary now adds a repair signal:
+  - states the transform failed before compile;
+  - preserves the full materialization error, including all matching line numbers;
+  - includes the exact rejected `candidate_transform` JSON to repair;
+  - tells the planner to repair anchors/matches with larger unique surrounding-code snippets and not
+    restate the CUDA edit in prose.
+- Live summary after the change now includes the full Q-staging repair signal, including:
+  `matching start lines: 54, 84, 121, 127, 155` and the rejected transform JSON.
+
+Verification:
+
+- Focused tests:
+  `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_requests_transform_anchor_repair tests/test_evolve.py::test_summarize_attempt_history_drops_compile_followup_after_preflight_rejection -q`
+  passed, 2 tests.
+- Live summary check:
+  `.venv/bin/python - <<'PY' ... summarize_attempt_history(Path('attempts'), limit=6) ... PY`
+  showed the new follow-up signal with the full ambiguous-anchor line list and rejected
+  `candidate_transform` JSON.
+- `.venv/bin/python -m pytest -q`: passed, 343 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `afaecd537b4e1967b379ccea018291ac21f94d3a` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The live loop is now reaching meaningful semantic CUDA edits. The immediate blocker is not CUDA
+  syntax or raw diffs; it is the planner's ability to repair structured transform anchors. The next
+  bounded loop should test whether the explicit repair signal causes the agent to retry Q staging
+  with unique anchors instead of prose-only planning.
