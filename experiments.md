@@ -10380,3 +10380,57 @@ Decision:
   was still too permissive: it allowed a score command to masquerade as profiling. The fixed validator
   keeps the loop honest about what evidence each command can actually produce and should push the next
   loop toward either a real `candidate_transform` or a genuinely supported diagnostic.
+
+## 2026-05-09 - Checkpoint 4.83: Reject env-as-source-inspection plans
+
+Success criteria for this checkpoint:
+
+- Run a short follow-up loop after the score/profiling guard.
+- Fix the next controllable agent-command contract violation if one appears.
+- Verify the fix with focused and full tests.
+
+Loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_score_profile_guard.json --timeout-s 900 --env-file ../avo/.env.local`
+- Result: no accepted candidate; `completed_steps=2`, `stopped_reason=max_steps`.
+- Step 1:
+  - The agent no longer used `avo score` as a fake profiler.
+  - It instead proposed "file inspection only" of warp-row and MMA candidate sources, but selected
+    `avo env` as the bounded command.
+  - `avo env` succeeded, but it only reports CUDA/build environment state; it cannot inspect source
+    files. This was another action-channel mismatch.
+- Step 2:
+  - Planning failed after three retries on the already-known recorded no-patch compile diagnostic.
+
+Runtime change:
+
+- Runtime commit `d590888ec1bf64b51c7905da7290d08fc42788e6`
+  (`fix: reject env source inspection plans`) adds an explicit env-command validator.
+- `avo env` is now rejected when the planning text asks to inspect/read/review/examine source,
+  files, kernels, wrappers, candidates, seeds, staging, or vectorization.
+- The feedback says repo context already includes local candidate excerpts, so the planner should
+  choose a structured `candidate_transform`, a compile/score diagnostic tied to a concrete source
+  change, or a real CUDA/build environment diagnostic.
+- Concrete CUDA/build failures still allow `avo env`; the guard targets source-inspection misuse,
+  not legitimate environment diagnostics.
+
+Verification:
+
+- Focused tests:
+  `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_rejects_env_for_source_inspection tests/test_agent.py::test_parse_variation_decision_allows_env_for_cuda_environment_check tests/test_agent.py::test_parse_variation_decision_allows_env_for_concrete_build_failure tests/test_agent.py::test_decision_feedback_explains_env_source_inspection_error -q`
+  passed, 4 tests.
+- Live failure-shape reproduction now raises:
+  `next_command avo env cannot inspect source files; repo context already includes candidate excerpts, and env is only for CUDA/build environment diagnostics`.
+- `.venv/bin/python -m pytest -q`: passed, 342 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `d590888ec1bf64b51c7905da7290d08fc42788e6` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The current agent loop is now stricter about matching a bounded command to the evidence it can
+  actually produce: `score` cannot pretend to be profiling, and `env` cannot pretend to inspect
+  source. This is still not a performance breakthrough, but it is a root-level agent fix rather than
+  another CUDA phrase ban.
