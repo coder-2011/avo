@@ -10175,3 +10175,80 @@ Decision:
 - The loop is now making more semantically useful CUDA proposals. The immediate transform-interface
   blocker is ambiguous anchors, so the next loop should be able to repair K-staging attempts with
   concrete line-number feedback instead of falling back to broad raw diffs.
+
+## 2026-05-09 - Checkpoint 4.80: Expand general CUDA practice knowledge
+
+Success criteria for this checkpoint:
+
+- Move the knowledge base away from narrow CUDA failure anecdotes and toward general CUDA working
+  knowledge.
+- Keep the new information under `knowledge/b/`, where the broad background corpus lives.
+- Make the information useful to the planner by adding retrieval claims and tests, not just prose.
+
+Runtime change:
+
+- Runtime commit `99f142c807b0dc0a28c7f5831e08a2079144e368`
+  (`docs: expand general cuda practice knowledge`) adds
+  `knowledge/b/cuda_programming_practice.md`.
+- The new file covers:
+  - CUDA as a throughput-oriented host/device programming model;
+  - decomposing work across threads, warps, blocks, and tiles;
+  - indexing, `threadIdx.x` linearization, layout, coalescing, vectorized access, and tail guards;
+  - global/shared/register/local/constant memory tradeoffs;
+  - shared-memory tiling as complete dataflow, including load mapping, layout conversion, barriers,
+    bank conflicts, reuse, and overwrite safety;
+  - synchronization scope: `__syncthreads()`, warp shuffles, atomics, and lack of a normal
+    cross-block barrier;
+  - double-buffering and `cp.async`/`cuda::memcpy_async` as producer/consumer overlap rather than
+    cosmetic copy replacement;
+  - tensor-core/WMMA contract thinking: fragment opacity, shape/layout/type/leading-dimension
+    coupling, loads, MMA operations, and stores;
+  - launch-resource tradeoffs: occupancy, registers, shared memory, block size, ptxas output, and
+    launch feasibility;
+  - streams, events, default-stream synchronization, and host/device timing discipline;
+  - realistic-workload profiling with Nsight-style launch, occupancy, SpeedOfLight, scheduler,
+    memory-workload, source-counter, and timing-distribution checks;
+  - the desired planner rule: make the smallest coherent semantic transformation that preserves
+    invariants and can be validated.
+- `knowledge/retrieval_claims.md` now defines useful claims for those general topics, including an
+  evidence source, why each claim matters, and the query expected to retrieve it.
+- `tests/test_knowledge.py` now checks retrieval for the new general CUDA topics and verifies that
+  the broad `knowledge/b` content is indexed from the `knowledge/ampere.md` entrypoint.
+- `README.md` documents the new `knowledge/b/cuda_programming_practice.md` file.
+
+Source provenance:
+
+- Official NVIDIA CUDA Programming Guide pages used for the general model, SIMT kernels,
+  memory spaces, streams/events, pipelines, and async-copy behavior:
+  - https://docs.nvidia.com/cuda/cuda-programming-guide/01-introduction/programming-model.html
+  - https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/writing-cuda-kernels.html
+  - https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html
+  - https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/pipelines.html
+  - https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/async-copies.html
+- Official NVIDIA CUDA C++ Best Practices Guide used for coalescing, shared memory, bank conflicts,
+  realistic workload guidance, and profiling workflow:
+  https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html
+- Official NVIDIA Nsight Compute Profiling Guide used for broad bottleneck categories such as
+  launch metrics, occupancy, SpeedOfLight, scheduler behavior, memory workload, source counters,
+  replay overhead, and roofline analysis:
+  https://docs.nvidia.com/nsight-compute/ProfilingGuide/
+- Local source of derived guidance:
+  - the user's design correction that "small" means scoped, reviewable, recoverable, hypothesis-led
+    semantic transformations, not the smallest possible text edit;
+  - recent AVO failures around no-effect shared-memory scaffolding, malformed async-copy attempts,
+    WMMA fragment-shape edits, and compile-only transforms that did not improve the target score.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_knowledge.py -q`: passed, 34 tests.
+- `.venv/bin/python -m pytest -q`: passed, 336 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `99f142c807b0dc0a28c7f5831e08a2079144e368` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The knowledge base now has broader CUDA background that should help the planner form better
+  hypotheses before editing kernels. This is a better root-level improvement than adding more
+  reactive phrase bans around individual failed attempts.
