@@ -9545,3 +9545,58 @@ Decision:
   can produce non-finite outputs.
 - The next loop should avoid this exact lifecycle class and either produce a valid two-stage
   K-staging transform or move to a different Ampere optimization family.
+
+## 2026-05-09 - Checkpoint 4.70: Clear stale pending transform follow-ups
+
+Success criteria for this checkpoint:
+
+- Run a short loop after adding the async pipeline lifecycle preflight.
+- If the planner fails before CUDA execution, classify whether the failure is stale loop state or a
+  real kernel-search issue.
+- Fix stale follow-up state without weakening the fresh compile-only score contract.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_async_lifecycle_preflight.json --timeout-s 900 --env-file ../avo/.env.local`
+- No compile or score command executed.
+- Step 1 failed planning validation with:
+  `next_command scores without the pending compile-only candidate_transform`.
+- Step 2 failed planning validation with:
+  `next_command repeats a recorded no-patch compile diagnostic`.
+
+Diagnosis:
+
+- The pending-transform gate was scanning for any historical compile-only transform that did not have
+  the same transform identity in a score attempt.
+- That made an older shape-cap compile from before the cp.async score remain pending even after a
+  later score attempt had already moved the loop forward.
+- The desired behavior is narrower: only the latest successful compile-only transform should be
+  pending, and a later score attempt should clear older compile-only follow-ups. Planning failures
+  after a fresh compile should still preserve the pending score requirement.
+
+Runtime change:
+
+- Runtime commit `60b831b80e0f2b35148c8985e5575bf72b85eb1b` changes
+  `_pending_compile_only_transform` to scan backward until the first score payload or successful
+  compile-only transform:
+  - if the newest relevant event is a score, no stale compile follow-up remains pending;
+  - if the newest relevant event is a compile-only transform, the exact-transform score requirement
+    remains active.
+
+Verification:
+
+- Focused tests:
+  `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_drops_stale_compile_followup_after_later_score tests/test_evolve.py::test_summarize_attempt_history_keeps_compile_followup_after_planning_failure tests/test_evolve.py::test_attempt_history_rejects_score_without_pending_transform -q`: passed, 3 tests.
+- `.venv/bin/python -m pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 229 tests.
+- `.venv/bin/python -m pytest -q`: passed, 292 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `60b831b80e0f2b35148c8985e5575bf72b85eb1b` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- This was loop-state debt exposed by the post-preflight run, not a CUDA search result.
+- The next loop should now be free to choose a new scored transform family without being blocked by
+  an old compile-only transform that was superseded by a later score attempt.
