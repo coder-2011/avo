@@ -9091,3 +9091,33 @@ Verification:
 - `uv run --extra dev pytest`: passed, 259 tests.
 - `uv run --extra dev ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-09 - Checkpoint 4.61: Make CUDA preflights class-oriented
+
+Success criteria for this checkpoint:
+
+- Reduce prompt/context specificity around prior CUDA mistakes.
+- Keep CUDA kernel evolution on the structured-transform interface.
+- Make recurring failure-class promotion activate concrete structural preflight checks, not just
+  supervisor advice.
+- Reframe small-shape seed caps as safety fences while keeping the long-sequence target suite front
+  and center.
+
+Decision:
+
+- Replaced the old planning-risk phrase tuple with class-level risk classifiers for predicted
+  compile failures, predicted correctness failures, incomplete edits, and no-effect skeletons.
+- Simplified repo context and retry feedback so it describes structural contracts rather than exact
+  historical failures.
+- Added an always-on MMA wrapper/kernel shape-contract preflight for shape-cap changes.
+- Added promoted hard checks for recurring CUDA syntax delimiter failures and recurring WMMA
+  fragment-shape failures, and persisted concrete `track_names` in `preflight_tracks.json`.
+- Kept raw `.cu`/`.cuh` diffs rejected; materialized `candidate_transform` patches receive the
+  structural checks before compile or score.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_agent.py tests/test_evolve.py`: passed, 204 tests.
+- `.venv/bin/python -m pytest`: passed, 262 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
