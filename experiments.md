@@ -9659,3 +9659,58 @@ Decision:
 - It remains far below FA2 (`~109.8` TFLOPS recorded earlier), so the search should continue toward
   deeper Ampere dataflow and tiling changes. This checkpoint only establishes a better accepted
   baseline for subsequent agent iterations.
+
+## 2026-05-09 - Checkpoint 4.72: Require semantic transform alignment
+
+Success criteria for this checkpoint:
+
+- Inspect the next loop after accepting the `kThreads=128` baseline.
+- Fix the planner interface so "small" means the smallest coherent semantic move, not the smallest
+  possible textual edit.
+- Keep constant-only transforms valid when the constant is the real optimization, but reject them
+  when the hypothesis claims a larger dataflow, tiling, staging, or scheduling behavior.
+
+Loop result:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_smaller_mma_block.json --timeout-s 900 --env-file ../avo/.env.local`
+- The loop completed two steps and accepted no candidate.
+- Step 1 compile-checked a `set_constexpr_int` transform changing `kThreads` from `128` to `256`,
+  while the prose claimed it would support two concurrent 16-row query tiles per block. This was a
+  semantic mismatch: the materialized edit only changed the block-size constant and did not implement
+  the claimed query-tile dataflow.
+- Step 2 scored a shared K/V staging transform on the full target lane. Correctness passed, but
+  throughput regressed to geomean `4.040569721634079` TFLOPS versus best `7.777584666360881`, so the
+  lineage gate rejected it.
+
+Runtime change:
+
+- Runtime commit `c4811a5b9aa1845a06ac02b523fd22b21e771ab5`
+  (`fix: require semantic transform alignment`) adds a semantic-alignment preflight:
+  - `set_constexpr_int` and `add_int_to_python_set` are treated as contract-only transforms;
+  - contract-only transforms are allowed for real constant/shape-contract retunes;
+  - they are rejected when planning text claims new executable dataflow, tiling, staging, or
+    scheduling behavior that the transform does not materialize;
+  - the transform batch cap was raised from 4 to 8 materialization steps so coordinated semantic
+    edits are not forced into artificially tiny text changes.
+- Attempt classification now records this as `planning_transform_semantic_mismatch`, promotable under
+  the `semantic_transform_contract` track.
+
+Verification:
+
+- Focused tests:
+  `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_allows_contract_only_constant_retune tests/test_agent.py::test_parse_variation_decision_rejects_constant_proxy_for_dataflow_claim tests/test_agent.py::test_decision_feedback_explains_transform_semantic_mismatch_error tests/test_evolve.py::test_summarize_attempt_history_classifies_transform_semantic_mismatch -q`: passed, 4 tests.
+- `.venv/bin/python -m pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 233 tests.
+- `.venv/bin/python -m pytest -q`: passed, 296 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `c4811a5b9aa1845a06ac02b523fd22b21e771ab5` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- This does not add another CUDA optimization, but it addresses a root loop-interface failure exposed
+  by the latest run.
+- The next planner step should either make a constant-only hypothesis about the current invariant or
+  materialize the full coherent dataflow change it claims, then validate it on the realistic target
+  lane.
