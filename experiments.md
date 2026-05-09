@@ -9980,3 +9980,63 @@ Decision:
 
 - The KB is now less overfit to local CUDA failure history. It has a reusable CUDA mental model that
   should help the planner form better first hypotheses before relying on Ampere-specific details.
+
+## 2026-05-09 - Checkpoint 4.77: Reject no-effect shared staging transforms
+
+Success criteria for this checkpoint:
+
+- Use the expanded CUDA KB in a real bounded planner loop.
+- Treat the result as search-loop evidence, even if no candidate is accepted.
+- Convert the observed failure into a structural preflight, not another phrase ban.
+
+Research/context refresh:
+
+- Exa over NVIDIA CUDA/Nsight docs reconfirmed that CUDA optimization should be
+  measurement/profiling-led: coalescing, shared-memory reuse, occupancy/resource limits, and
+  profiler bottleneck classification should drive edits.
+- Exa over CUTLASS Ampere FlashAttention v2 reconfirmed the useful attention direction: tiled Q/K/V
+  movement through shared memory with `cp.async`, tensor-core MMA, register pipelining, and online
+  softmax.
+
+Loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_general_cuda_grounding.json --timeout-s 900 --env-file ../avo/.env.local`
+- Result: no accepted candidate; `completed_steps=3`, `stopped_reason=max_steps`.
+- Step 1 failed planning validation. The planner described cooperative double-buffered async
+  K-staging in prose but did not serialize the transform as `candidate_transform`.
+- Step 2 compiled a materialized transform that only added `cooperative_groups.h` and declared
+  `__shared__ __nv_bfloat16 k_shared[2][kTile * kHeadDim]`.
+- Compile passed, but ptxas warned that `k_shared` was declared and never referenced. No correctness
+  or TFLOPS score was run. This was not a meaningful semantic move.
+- Step 3 failed planning validation again by trying to score the same no-effect transform in prose.
+
+Runtime change:
+
+- Runtime commit `2e3efd0c73cdbbca25afe21ff427c2d74c379457`
+  (`fix: reject unused shared staging transforms`) adds a structural preflight track:
+  `no_effect_shared_staging_buffer`, classified as `no_effect_or_skeleton`.
+- The detector rejects a new CUDA `__shared__` staging buffer when the same materialized patch does
+  not also load from, store to, or consume that buffer in executable dataflow.
+- This is intentionally structural: it does not ban shared-memory staging, only a declaration-only
+  staging scaffold.
+- `knowledge/ampere.md` and `knowledge/retrieval_claims.md` now record the loop result and the new
+  shared-staging-buffer claim.
+
+Verification:
+
+- Focused tests:
+  `.venv/bin/python -m pytest tests/test_agent.py::test_structural_preflight_rejects_unused_shared_staging_buffer tests/test_agent.py::test_structural_preflight_allows_used_shared_staging_buffer tests/test_evolve.py::test_run_decision_command_rejects_materialized_unused_shared_buffer tests/test_knowledge.py -q`
+  passed, 25 tests.
+- `.venv/bin/python -m pytest -q`: passed, 322 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `2e3efd0c73cdbbca25afe21ff427c2d74c379457` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The general CUDA KB moved the planner toward the right optimization family, but the transform
+  interface still allowed under-materialized CUDA scaffolding. The new preflight closes that gap
+  generally: future shared-memory staging must include producer/consumer dataflow in the same
+  coherent transform.
