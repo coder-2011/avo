@@ -10630,3 +10630,66 @@ Decision:
 - The next loop should be biased toward FA2-like dataflow coupling: Q register reuse and/or K/V
   async copy-pipeline work. A standalone Q shared-memory tile is now recorded as a confirmed
   negative family.
+
+## 2026-05-09 - Checkpoint 4.87: Repair transform scope feedback and edit-channel logging
+
+Success criteria for this checkpoint:
+
+- Fix the recurring structured-transform failure without adding another narrow CUDA ban phrase.
+- Keep the planner on semantic transforms rather than raw CUDA diffs.
+- Verify with unit tests and a live evolve loop.
+
+Loop before the fix:
+
+- Runtime loop file: `attempts/loop_after_fa2_sm80_staging_cue.json`.
+- Result: no accepted candidate.
+- The planner moved in the right semantic direction by trying K staging, but the transform failed
+  materialization because the anchor `__syncthreads();` matched five places.
+- The failed insertion referenced `key_start`, so the repair needed to select an anchor inside the
+  `for (int key_start = ...)` loop, not merely any unique sync point.
+
+Runtime fixes:
+
+- Runtime commit `72b5a42` (`fix: hint transform lexical scope repairs`):
+  - adds a transform repair hint for inserts that reference loop-local `key_start` while anchoring
+    outside that lexical context;
+  - keeps the feedback phrased as scope repair, not a one-off CUDA phrase ban;
+  - adds regression coverage in `tests/test_evolve.py`.
+- Runtime commit `80ceb42` (`fix: preserve transform edit channel in attempts`):
+  - keeps transform attempts' `decision.candidate_patch` as the planner's actual empty patch field;
+  - records the orchestrator-generated unified diff separately as `materialized_patch`;
+  - uses `materialized_patch` for cleanup and accepted lineage artifacts, so transform attempts stay
+    recoverable without pretending the agent emitted a raw CUDA diff.
+
+Live verification:
+
+- Runtime loop file: `attempts/loop_after_scope_repair_hint.json`.
+- Result: no accepted candidate.
+- Step 1: planner validation rejected a repeated recorded unpatched MMA seed score.
+- Step 2: the agent repaired the K-staging transform anchor using broader loop context, materialized
+  the transform, and compiled it successfully:
+  - no spills;
+  - 40 registers;
+  - 1 barrier;
+  - 14016 bytes shared memory.
+- The loop stopped at the two-step limit before scoring the compiled K-staging transform.
+
+Verification:
+
+- After `72b5a42`:
+  - `.venv/bin/python -m pytest -q`: passed, 346 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+- After `80ceb42`:
+  - focused transform/channel tests: passed, 3 tests;
+  - `.venv/bin/python -m pytest -q`: passed, 347 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- The agent-side issue is improved in the intended direction: failed CUDA transforms now produce
+  structural repair information the planner can act on, and attempt records no longer blur the
+  transform interface with raw planner diffs.
+- The next loop should either score the compiled K-staging transform or move to a materially
+  different FA2-like dataflow change if the planner judges synchronous K staging alone too weak.
