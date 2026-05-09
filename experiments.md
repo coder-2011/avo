@@ -10693,3 +10693,84 @@ Decision:
   transform interface with raw planner diffs.
 - The next loop should either score the compiled K-staging transform or move to a materially
   different FA2-like dataflow change if the planner judges synchronous K staging alone too weak.
+
+## 2026-05-09 - Checkpoint 4.88: Score K staging and sharpen next direction
+
+Success criteria for this checkpoint:
+
+- Run the agent loop after preserving the transform edit channel.
+- Score the pending K-staging transform if the planner keeps that direction.
+- Record the outcome as retrievable knowledge and use fresh external evidence to steer the next
+  search direction.
+
+Runtime loop:
+
+- Runtime loop file: `attempts/loop_after_transform_channel_preserve.json`.
+- Result: no accepted candidate.
+- Steps 1 and 2 failed planner validation: the agent tried to score the compiled K-staging edit in
+  prose without carrying the required `candidate_transform`.
+- Step 3 repaired the decision contract:
+  - `edit_mode="transform"`;
+  - `candidate_patch=""`;
+  - exact K-staging `candidate_transform`;
+  - orchestrator-generated diff recorded separately as `materialized_patch`.
+- The score passed all 8 full-target BF16 correctness cases but regressed:
+  - geomean `4.16538030902376` TFLOPS;
+  - best remained `7.777584666360881` TFLOPS;
+  - gate reason: `candidate regressed geomean throughput`.
+
+K-staging per-case TFLOPS:
+
+- noncausal seq4096: `6.061454911980457`;
+- causal seq4096: `3.038540148101854`;
+- noncausal seq8192: `5.971483106041282`;
+- causal seq8192: `2.9783210189160676`;
+- noncausal seq16384: `5.797175125340377`;
+- causal seq16384: `2.9231440595043137`;
+- noncausal seq32768: `5.743468343189027`;
+- causal seq32768: `2.8425023612542684`.
+
+Research:
+
+- Exa query:
+  `FlashAttention-2 Ampere SM80 forward kernel cp.async K V shared memory tiled copy ldmatrix QK PV pipeline source code explanation`
+- Useful sources:
+  - NVIDIA CUTLASS CuTeDSL Ampere FlashAttention v2 example:
+    https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/ampere/flash_attention_v2.py
+  - Flash Attention from Scratch Part 2, Ampere building blocks:
+    https://lubits.ch/flash/Part-2
+- Useful finding:
+  - productive Ampere K/V staging is a GMEM-to-SMEM-to-register pipeline:
+    128-bit `cp.async` copies, swizzled/ldmatrix-compatible shared layouts,
+    `LdMatrix8x8x16bOp` shared-to-register loads, MMA operand layouts, and overlap.
+  - The local synchronous `k_shared` result is therefore an expected negative: it adds cooperative
+    loads and an extra barrier without layout-aware `ldmatrix` use or overlap.
+
+Runtime knowledge update:
+
+- Runtime commit `73b49cd` (`docs: record k staging regression`) updates:
+  - `knowledge/ampere.md`;
+  - `knowledge/retrieval_claims.md`;
+  - `tests/test_knowledge.py`;
+  - follow-up scoring feedback in `avo/evolve.py` and `tests/test_evolve.py`.
+- New retrieval queries:
+  - `synchronous K shared memory staging regression geomean 4.16538030902376 k_shared key_start`;
+  - `CUTLASS Ampere FlashAttention cp.async ldmatrix register pipeline 128-bit K V staging`.
+
+Verification:
+
+- Focused runtime tests:
+  `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_requests_score_after_compile_only_transform tests/test_knowledge.py -q`
+  passed, 40 tests.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 349 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- Synchronous shared-memory staging for either Q or K is now a confirmed losing family on the
+  current seed. Future work should not retry isolated `q_shared` or `k_shared` tiles.
+- The next useful semantic direction is either a real Ampere copy/layout/register pipeline
+  (`cp.async` plus ldmatrix-compatible shared layout and overlap) or a broader FA2-like work
+  decomposition such as wider 128x128 tiling.
