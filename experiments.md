@@ -9770,3 +9770,73 @@ Decision:
   search step should move away from block-size retuning and toward an actual Ampere dataflow change,
   preferably one that borrows a narrower piece of FA2/CUTLASS structure such as swizzled shared
   layout, Q/K/V copy granularity, or a real tiled-MMA work distribution.
+
+## 2026-05-09 - Checkpoint 4.74: Add local searchable knowledge retrieval
+
+Success criteria for this checkpoint:
+
+- Give the Anthropic planner searchable local knowledge access instead of passing the entire
+  `knowledge/ampere.md` file as one flat prompt block.
+- Keep the implementation deterministic, auditable, and file-based before adding any larger external
+  RAG service.
+- Wire retrieval into `agent-plan`, `evolve-once`, and `evolve-loop` so retrieved context updates as
+  lineage and attempt history change.
+
+Preceding loop result:
+
+- A loop after the rejected `kThreads=64` retune produced two useful signals:
+  - planning step 1 failed with `planning_transform_semantic_mismatch` for another contract-only
+    `kThreads=64` idea whose prose claimed broader register/shared-memory/dataflow effects;
+  - planning step 2 moved to a real synchronous Q shared-memory staging transform.
+- The Q-staging transform:
+  - declared a static 16x128 BF16 Q shared-memory tile;
+  - cooperatively loaded the current Q tile before the K loop;
+  - synchronized;
+  - changed QK WMMA loads to read tile-local shared memory instead of global Q.
+- Correctness passed for all 8 full-target BF16 cases, but throughput regressed:
+  - geomean `6.722112165053056` TFLOPS versus best `7.777584666360881`;
+  - noncausal seq4096 `9.576218136406252`;
+  - causal seq4096 `4.97938654742146`;
+  - noncausal seq8192 `9.448375190110047`;
+  - causal seq8192 `4.926014953814022`;
+  - noncausal seq16384 `9.230892038439242`;
+  - causal seq16384 `4.7701761514162415`;
+  - noncausal seq32768 `9.217864326048506`;
+  - causal seq32768 `4.6282297552780625`.
+- Runtime commit `78cde3293db9562ae42594cb913bcc83e86b9f37`
+  (`docs: record q staging regression`) added that negative evidence to `knowledge/ampere.md` and
+  was pushed/fetch-verified.
+
+Runtime change:
+
+- Runtime commit `c21e4608a40a652e55274cce3ce9adb97313d257`
+  (`feat: add local knowledge retrieval`) adds `avo/knowledge.py`.
+- The retriever:
+  - indexes supported local files (`.md`, `.txt`, `.py`, `.cu`, `.cuh`, `.cpp`, `.h`, `.hpp`);
+  - chunks files into bounded line-range snippets;
+  - scores chunks with deterministic lexical/idf-style matching;
+  - returns an auditable prompt section with file labels, chunk ids, line ranges, and scores;
+  - treats `knowledge/ampere.md` as the entry point for the surrounding `knowledge/` corpus.
+- New CLI:
+  `uv run python -m avo knowledge-search knowledge/ampere.md --query "Ampere cp.async shared staging WMMA head_dim 128"`
+- `agent-plan`, `evolve-once`, and `evolve-loop` now build the retrieval query from:
+  - the current lineage summary;
+  - recent attempt history;
+  - local repo context.
+
+Verification:
+
+- `uv run python -m avo knowledge-search knowledge/ampere.md --query "Ampere cp.async shared staging WMMA head_dim 128" --max-chunks 3 --max-chars 4000`: returned ranked local snippets with file/chunk metadata.
+- `.venv/bin/python -m pytest tests/test_knowledge.py tests/test_cli.py::test_knowledge_search_command_prints_retrieved_context tests/test_cli.py::test_evolve_loop_runs_until_accepted_and_records_attempts -q`: passed, 5 tests.
+- `.venv/bin/python -m pytest -q`: passed, 300 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `c21e4608a40a652e55274cce3ce9adb97313d257` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- This is the first version of the searchable knowledge base. It is intentionally local and
+  deterministic rather than a full vector/RAG service.
+- Next improvement, if needed, is to add more source documents under `knowledge/` (FA2 source notes,
+  CUTLASS excerpts, profiler notes, and paper notes), because the retrieval substrate is now in place.
