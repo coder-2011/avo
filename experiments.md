@@ -10097,3 +10097,81 @@ Decision:
 - The loop is now less likely to get trapped by its own stale compile-only memory. A preflight
   rejection of a transform is treated as stronger evidence than an older compile success for the same
   transform.
+
+## 2026-05-09 - Checkpoint 4.79: Score chunk unroll and improve ambiguous-anchor feedback
+
+Success criteria for this checkpoint:
+
+- Run a new loop after stale rejected-transform follow-ups were cleared.
+- Score any coherent compile-only transform that the loop produces.
+- If the transform interface blocks semantic CUDA edits, improve the repair signal without opening
+  raw CUDA diffs.
+
+Loop 1:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_rejected_followup_clear.json --timeout-s 900 --env-file ../avo/.env.local`
+- Result: no accepted candidate; `completed_steps=3`, `stopped_reason=max_steps`.
+- Step 1 proposed a genuine K-staging transform: add a 16x128 BF16 `k_shared` tile, cooperatively
+  stage K, and route the first QK WMMA fragment through shared memory. It failed materialization
+  because `insert_before_once` found 3 matching anchors.
+- Step 2 proposed a narrower K-staging transform and again failed materialization because the anchor
+  was still ambiguous, now with 2 matches.
+- Step 3 reset to a simpler WMMA chunk-loop unroll-by-2 transform for QK and PV loops. It compiled
+  cleanly: no spills, 39 registers, 1 barrier, 9920 bytes shared memory. Because the loop hit
+  max-steps, the rejected patch was cleaned up and the transform was left as a pending compile-only
+  follow-up.
+
+Loop 2:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 2 --loop-json attempts/loop_after_chunk_unroll2_compile.json --timeout-s 900 --env-file ../avo/.env.local`
+- Step 1 scored the exact pending chunk-unroll transform on the full target suite.
+- Correctness: passed all 8 BF16 full-target cases.
+- Geomean: `7.758592599549404` TFLOPS.
+- Previous best: `7.777584666360881` TFLOPS.
+- Gate: rejected for geomean regression.
+- Per-case TFLOPS:
+  - noncausal seq4096: `11.422010794038217`;
+  - causal seq4096: `5.520844568626744`;
+  - noncausal seq8192: `11.650990264230991`;
+  - causal seq8192: `5.376679254549787`;
+  - noncausal seq16384: `11.147879962119449`;
+  - causal seq16384: `5.269909715075147`;
+  - noncausal seq32768: `10.902247712441563`;
+  - causal seq32768: `5.189518007452957`.
+- Step 2 then tried to return to K staging but again failed planning validation by describing the
+  edit in prose without a serialized transform.
+
+Runtime change:
+
+- Runtime commit `d87b630215bdb83c9192ecfd1a227347fafa1567`
+  (`fix: explain ambiguous transform anchors`) improves materialization errors.
+- Ambiguous `replace_once` and `insert_*_once` now report matching start line numbers and explicitly
+  tell the planner to use a larger unique anchor with surrounding code.
+- This keeps the structured-transform interface small while making semantic CUDA transform repair
+  easier.
+- Knowledge notes and retrieval claims now record:
+  - K-staging failed on ambiguous anchors, not on CUDA structural invalidity;
+  - chunk-loop unroll-by-2 was correct but regressed;
+  - future work should prefer dataflow/layout/staging changes over more local unroll-only edits.
+
+Verification:
+
+- Focused transform tests:
+  `.venv/bin/python -m pytest tests/test_evolve.py::test_materialize_candidate_transform_rejects_ambiguous_anchor tests/test_evolve.py::test_materialize_candidate_transform_reports_ambiguous_insert_lines -q`
+  passed, 2 tests.
+- Focused knowledge/transform run:
+  `.venv/bin/python -m pytest tests/test_evolve.py::test_materialize_candidate_transform_rejects_ambiguous_anchor tests/test_evolve.py::test_materialize_candidate_transform_reports_ambiguous_insert_lines tests/test_knowledge.py -q`
+  passed, 27 tests.
+- `.venv/bin/python -m pytest -q`: passed, 327 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `d87b630215bdb83c9192ecfd1a227347fafa1567` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The loop is now making more semantically useful CUDA proposals. The immediate transform-interface
+  blocker is ambiguous anchors, so the next loop should be able to repair K-staging attempts with
+  concrete line-number feedback instead of falling back to broad raw diffs.
