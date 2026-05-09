@@ -9491,3 +9491,57 @@ Decision:
 - The next search work should classify the non-finite cp.async K-staging failure as a transform
   family issue, likely around buffer swapping/wait ordering or incomplete current-buffer update,
   rather than adding another prompt phrase.
+
+## 2026-05-09 - Checkpoint 4.69: Preflight async pipeline lifecycle failures
+
+Success criteria for this checkpoint:
+
+- Convert the non-finite cp.async K-staging score failure into a structural failure class.
+- Keep the check class-oriented: reject invalid async pipeline lifecycles, not exact patch phrases.
+- Verify the new check catches the real failed transform from checkpoint 4.68 while allowing a
+  lifecycle-correct two-stage sketch.
+
+Research basis:
+
+- NVIDIA CUDA Programming Guide, "Asynchronous Data Copies": LDGSTS async copies are global-to-shared
+  operations, the primitive API uses `__pipeline_memcpy_async`, `__pipeline_commit`, and
+  `__pipeline_wait_prior`, and shared data requires `__syncthreads()` after the copy completion
+  mechanism.
+- NVIDIA CUDA Programming Guide, "Pipelines": `__pipeline_wait_prior(N)` / pipeline wait-prior waits
+  for all but the last `N` commits. A two-stage prefetch pattern therefore must keep enough committed
+  stages in flight before waiting with prior `1`.
+- NVIDIA Ampere Tuning Guide: Ampere sm_86 supports hardware-accelerated global-to-shared async copy,
+  but correctness still depends on valid synchronization and shared-memory lifecycle.
+
+Runtime change:
+
+- Runtime commit `8a6af5c33afbb6fddff158290d251dd8b9cd741f` adds structural preflight track
+  `async_pipeline_stage_lifecycle`, classified as `correctness_nonfinite_output`.
+- The detector rejects cp.async transforms that:
+  - call `__pipeline_wait_prior(1)` before two committed stages have been inserted, or
+  - use a `1 - stage`/`1 - buffer` double-buffer pattern without advancing that binary stage variable.
+- Attempt-history classification now distinguishes score failures with non-finite output as
+  `correctness_nonfinite_output` instead of generic `correctness_failed`, and includes the first score
+  error in the attempt summary.
+
+Verification:
+
+- Focused tests:
+  `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_rejects_invalid_async_pipeline_lifecycle tests/test_agent.py::test_structural_preflight_allows_valid_async_pipeline_lifecycle tests/test_evolve.py::test_summarize_attempt_history_classifies_nonfinite_score -q`: passed, 3 tests.
+- `.venv/bin/python -m pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 228 tests.
+- `.venv/bin/python -m pytest -q`: passed, 291 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- The actual failed score attempt from `attempts/2026-05-09T04-10-10-00-00.json` now fails
+  `validate_candidate_patch_structural_preflight(..., allow_cuda_source_edits=True)` with:
+  `structural preflight track async_pipeline_stage_lifecycle classified as correctness_nonfinite_output`.
+- Runtime commit `8a6af5c33afbb6fddff158290d251dd8b9cd741f` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- This is a hard structural track derived from the failed transform family: a compiled async-copy
+  transform that reads from a stage before it is guaranteed ready or never advances the stage index
+  can produce non-finite outputs.
+- The next loop should avoid this exact lifecycle class and either produce a valid two-stage
+  K-staging transform or move to a different Ampere optimization family.
