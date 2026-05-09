@@ -10040,3 +10040,60 @@ Decision:
   interface still allowed under-materialized CUDA scaffolding. The new preflight closes that gap
   generally: future shared-memory staging must include producer/consumer dataflow in the same
   coherent transform.
+
+## 2026-05-09 - Checkpoint 4.78: Clear stale compile-only followups after preflight rejection
+
+Success criteria for this checkpoint:
+
+- Run the loop again with `no_effect_shared_staging_buffer` active.
+- Verify that declaration-only shared-memory staging is blocked before scoring.
+- Fix any stale attempt-history signal created by that rejection.
+
+Loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_shared_staging_preflight.json --timeout-s 900 --env-file ../avo/.env.local`
+- Result: no accepted candidate; `completed_steps=3`, `stopped_reason=max_steps`.
+- Step 1 failed planning validation because it again tried to score the previous compile-only
+  shared-staging transform in prose.
+- Step 2 supplied the exact transform and attempted a full-target score, but runtime preflight
+  rejected it before scoring:
+  `structural preflight track no_effect_shared_staging_buffer classified as no_effect_or_skeleton`.
+- Step 3 again failed planning validation by asking to score the already-rejected no-effect
+  transform.
+
+Runtime change:
+
+- Runtime commit `cfcaa1cb5521647c03426cb47b2d741a00afc540`
+  (`fix: clear rejected transform followups`) updates attempt-history follow-up logic.
+- `_pending_compile_only_transform` now tracks later structural-preflight rejections by
+  `candidate_transform` identity while scanning backward through attempts.
+- If the same transform was structurally rejected after a compile-only success, the old
+  compile-only success no longer produces a "score this candidate_transform" follow-up.
+- `_has_successful_compile_only_transform` also ignores identities that have since been rejected by
+  structural preflight.
+- Knowledge notes and retrieval claims now record that structural rejection invalidates stale
+  compile-only score follow-ups for the same transform identity.
+
+Verification:
+
+- Actual recent attempt summary after the fix no longer contains the stale
+  `compiled successfully but has not been scored` follow-up. It instead reports recurring
+  `planning_transform_preflight` and the active promoted transform-materialization track.
+- Focused regression:
+  `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_drops_compile_followup_after_preflight_rejection tests/test_evolve.py::test_summarize_attempt_history_requests_score_after_compile_only_transform tests/test_evolve.py::test_summarize_attempt_history_keeps_compile_followup_after_planning_failure tests/test_evolve.py::test_summarize_attempt_history_drops_stale_compile_followup_after_later_score -q`
+  passed, 4 tests.
+- Knowledge/follow-up focused run:
+  `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_drops_compile_followup_after_preflight_rejection tests/test_knowledge.py -q`
+  passed, 24 tests.
+- `.venv/bin/python -m pytest -q`: passed, 324 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `cfcaa1cb5521647c03426cb47b2d741a00afc540` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The loop is now less likely to get trapped by its own stale compile-only memory. A preflight
+  rejection of a transform is treated as stronger evidence than an older compile success for the same
+  transform.
