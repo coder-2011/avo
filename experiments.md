@@ -9174,3 +9174,96 @@ Verification:
 - `.venv/bin/python -m pytest`: passed, 264 tests.
 - `.venv/bin/ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-09 - Checkpoint 4.63: Repair structured transform planning loop
+
+Success criteria for this checkpoint:
+
+- Keep FlashAttention-2 as a comparison baseline without letting it block candidate lineage
+  progress.
+- Record the current MMA candidate on the full realistic target suite, even though it is far below
+  FA2.
+- Address the planner failure mode where the agent describes broad CUDA edits in prose without a
+  representable `candidate_transform`.
+- Keep the fix general: prefer tiny transform operations and class-level feedback over another
+  phrase blacklist.
+
+Research context:
+
+- Exa search for structured code-edit interfaces found current evidence that raw unified diffs are
+  brittle for LLM code editing because line offsets and fragmented hunks are hard for models to
+  generate reliably. Relevant references:
+  - "To Diff or Not to Diff? Structure-Aware and Adaptive Output Formats for Efficient LLM-based
+    Code Editing": https://arxiv.org/html/2604.27296
+  - "SWE-Edit: Rethinking Code Editing for Efficient SWE-Agent":
+    https://arxiv.org/html/2604.26102
+- The takeaway for this runtime is not to add larger raw CUDA diff guards. The interface should give
+  the planner small, deterministic edit operations and make invalid prose-only edits recover into
+  structured operations when that can be done unambiguously.
+
+Baseline and lineage decision:
+
+- Runtime commit `cfcc889` changed candidate lineage comparison so FA2 baseline payloads are
+  recorded as baseline lanes, not candidate acceptance thresholds.
+- `accepted_score_lanes()` now keeps baseline and candidate lanes separately for the same workload
+  signature, so the summary can show the FA2 comparison lane and the candidate lane side by side.
+- Regression tests cover baseline/candidate lane separation and candidate regression checks against
+  prior candidates rather than FA2.
+
+Current full-suite MMA candidate lane:
+
+- Nested lineage commit: `0ca463a` (`evolve: accept mma full target lane`).
+- Command:
+  `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 4096,8192,16384,32768 --total-tokens 32768 --num-heads 16 --head-dim 128 --dtype bf16 --causal both --trials 3 --repeats 1 --warmup 1 --timeout-s 900`
+- All 8 cases passed correctness.
+- Geomean: `7.283505507996481` TFLOPS.
+- Noncausal TFLOPS: seq4096 `10.629656942098142`, seq8192 `10.38592794365928`,
+  seq16384 `10.045924630314838`, seq32768 `10.057536029077653`.
+- Causal TFLOPS: seq4096 `5.40697018480344`, seq8192 `5.252459141043947`,
+  seq16384 `5.084148001620259`, seq32768 `4.917481283665701`.
+- This establishes the full target-suite candidate lane, but it is still far below the FA2 baseline
+  geomean `109.82622931666803` TFLOPS.
+
+Planning-loop observations:
+
+- `attempts/loop_after_full_target_lane.json` ran two bounded steps and failed before local
+  compile/score:
+  - Step 1 was rejected because conditional risk text such as "if compile fails ... undefined async
+    copy symbols" was classified as an incomplete edit.
+  - Step 2 described a broad cp.async CUDA change but omitted both `candidate_transform` and
+    `candidate_patch`.
+- After the first prompt/classifier repair, `attempts/loop_after_planning_repair.json` still failed
+  both steps for prose-only CUDA edits. This showed that feedback alone was not enough.
+
+Decision:
+
+- Runtime commit `5ed61be` adds a tiny `add_include` transform operation, materialized by the
+  orchestrator rather than emitted as a raw CUDA diff.
+- The decision parser can infer a structured `add_include` transform from simple prose such as
+  "Add cuda_pipeline_primitives.h include to MMA kernel" when the target source is unambiguous.
+- Planning-risk classification now preserves decision-field boundaries before scanning risk
+  windows, and conditional execution-risk language no longer trips the incomplete-edit classifier.
+- Retry feedback and repo context now say that broad CUDA ideas must shrink to at most four exact
+  transform steps, or become a no-edit diagnostic.
+- `avo env` is now rejected for planner-interface/schema recovery. Planning failures must lead to a
+  valid transform or a kernel-search diagnostic, not another environment stability check.
+
+Live verification:
+
+- `attempts/loop_after_add_include_transform.json` ran two bounded steps after the repair.
+- Step 1 still chose a no-edit environment diagnostic; this exposed the planner-interface recovery
+  gap, which `5ed61be` now guards in validation.
+- Step 2 produced/inferred:
+  `{"op":"add_include","path":"candidates/cuda_mma_attention/attention_kernel.cu","header":"cuda_pipeline_primitives.h"}`.
+- The orchestrator materialized the transform, applied it, compiled the MMA kernel for sm_86, and
+  cleaned up the compile-only patch.
+- Compile evidence: ptxas reported 40 registers, 1 barrier, 9920 bytes shared memory, 0 spills.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 213 tests.
+- `.venv/bin/python -m pytest`: passed, 276 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `5ed61be111f034d12d8f886245673db4f452bb32` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
