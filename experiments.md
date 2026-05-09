@@ -10861,3 +10861,63 @@ Decision:
 - The recent-attempt supervisor signal now says the last five attempts produced no accepted
   candidate. The next useful action is a strategy reset toward a different Ampere optimization
   family, not another synchronous shared-memory staging attempt or thread-count prose edit.
+
+## 2026-05-09 - Checkpoint 4.91: Improve transform recovery and record wider-tile invariant
+
+Success criteria for this checkpoint:
+
+- Improve recovery for structured planner outputs without broadening raw CUDA diffs.
+- Verify the agent can move past prior edit-channel failures.
+- Record any new CUDA structural lesson from the next loops.
+
+Runtime fixes:
+
+- Runtime commit `056a62f` (`fix: infer constant retune transforms`):
+  - parser recovery now infers `set_constexpr_int` from natural constant-retune verbs such as
+    "increase", "decrease", and "retune", not only "change/set/update";
+  - this turns prose like "increase kThreads from 128 to 256 in candidates/.../attention_kernel.cu"
+    into a structured transform instead of a missing-edit-payload failure.
+- Runtime commit `7ebea08` (`fix: accept batch default transform path`):
+  - accepts `op=batch` with a top-level default `path` and fills that path into steps that omit it;
+  - keeps the Anthropic tool schema slim by advertising compact `steps_json` rather than a nested
+    `steps` array, after a loop proved the nested schema caused `Schema is too complex`.
+- Runtime commit `e51adcd` (`docs: record wider tile invariant`):
+  - records the `kTile=32` structural lesson in `knowledge/ampere.md` and
+    `knowledge/retrieval_claims.md`;
+  - adds retrieval coverage in `tests/test_knowledge.py`.
+
+Runtime loops:
+
+- `attempts/loop_after_constant_retune_inference.json`:
+  - no accepted candidate;
+  - exposed the top-level batch `path` shorthand failure.
+- `attempts/loop_after_batch_path_recovery.json`:
+  - failed before planning because the nested `steps` schema was too complex for Anthropic.
+- `attempts/loop_after_batch_path_recovery_schema_fix.json`:
+  - schema request succeeded again;
+  - agent proposed a real wider-query-tile transform (`kTile=32`) instead of another synchronous
+    shared-memory staging retry;
+  - materialization failed because one row-loop `replace_once` matched two locations.
+- `attempts/loop_after_tile32_anchor_repair_signal.json`:
+  - agent tried to repair the `kTile=32` transform with larger anchors;
+  - materialization still failed on one stale anchor;
+  - follow-up planning then self-rejected the family because existing MMA fragments only cover the
+    first 16 rows of a widened 32-row tile.
+
+Verification:
+
+- Focused runtime tests:
+  `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_infers_increase_constexpr_transform_from_edit tests/test_agent.py::test_parse_variation_decision_applies_batch_default_path tests/test_knowledge.py -q`
+  passed, 43 tests.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 353 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- The agent interface is better: natural constant retunes and common batch-path shorthand now recover
+  into structured transforms instead of failing at the edit-channel boundary.
+- Widening the MMA query tile is still a plausible direction, but not as a constants/buffer-only
+  transform. A correct wider tile needs explicit second 16-row sub-tile MMA, softmax, and output
+  dataflow. Otherwise rows are uncovered.
