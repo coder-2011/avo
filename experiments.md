@@ -9358,3 +9358,44 @@ Verification:
 - `git diff --check`: passed in the runtime repo.
 - Runtime commit `0b70de7db13a2dca53b8479a350edce6279c932f` was pushed and fetch-verified on
   `coder-2011/avo-ampere`.
+
+## 2026-05-09 - Checkpoint 4.66: Infer exact semantic replacements
+
+Success criteria for this checkpoint:
+
+- Run the live loop after reframing transforms as semantic moves.
+- Convert one concrete recurring failure into a better structured edit interface rather than a new
+  guard.
+- Keep placeholder or ambiguous prose rejected.
+
+Live loop:
+
+- Command:
+  `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 3 --loop-json attempts/loop_after_semantic_transform_contract.json --timeout-s 900 --env-file ../avo/.env.local`
+- The loop produced no accepted candidate.
+- Step 1 failed planning validation because the planner described a coherent K shared-memory
+  staging change but omitted both structured edit channels.
+- Step 2 failed on the pending-transform follow-up gate added in checkpoint 4.64.
+- Step 3 was the useful signal: the planner proposed an exact semantic replacement in prose:
+  replacing ``__shared__ __nv_bfloat16 probabilities[kScoreElements];`` with
+  ``__shared__ __nv_bfloat16 probabilities[kScoreElements + 8];`` to test padding, but still omitted
+  `candidate_transform`.
+
+Decision:
+
+- Runtime commit `70f04dd` teaches the decision parser to infer `replace_once` when the planner
+  provides exact backtick-quoted source and replacement snippets and the target candidate file is
+  clear.
+- This is not a new CUDA phrase guard. It improves the interface: exact source-to-source semantic
+  replacement prose can be recovered into a deterministic transform.
+- Placeholder snippets containing `...` or `…` are not inferred, so vague prose still fails instead
+  of becoming a malformed patch.
+
+Verification:
+
+- `.venv/bin/python -m pytest tests/test_agent.py tests/test_evolve.py -q`: passed, 221 tests.
+- `.venv/bin/python -m pytest`: passed, 284 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `70f04ddf33941b6faa96c779238b9cb74569d1e3` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
