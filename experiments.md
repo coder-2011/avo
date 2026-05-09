@@ -9840,3 +9840,82 @@ Decision:
   deterministic rather than a full vector/RAG service.
 - Next improvement, if needed, is to add more source documents under `knowledge/` (FA2 source notes,
   CUTLASS excerpts, profiler notes, and paper notes), because the retrieval substrate is now in place.
+
+## 2026-05-09 - Checkpoint 4.75: Define and test retrieved knowledge claims
+
+Success criteria for this checkpoint:
+
+- Define the derived/found knowledge as explicit claims, not just loose notes.
+- For each claim, state why it is useful to future search.
+- Test retrieval against the real local corpus so we know the planner can actually recover the
+  important facts.
+
+Runtime change:
+
+- Runtime commit `1c47fbcb42c0f3f2f6efb36daa68ded0e09ee60c`
+  (`test: define and verify retrieved knowledge`) adds `knowledge/retrieval_claims.md`.
+- The manifest defines high-value claims in four groups:
+  - Ampere target and FA2 baseline constraints;
+  - FA2/CUTLASS directional cues;
+  - transform-interface lessons;
+  - CUDA structural constraints and recent search evidence.
+- Each claim records:
+  - the claim itself;
+  - evidence source;
+  - why it is useful;
+  - the retrieval query expected to recover it.
+
+Claims now explicitly defined:
+
+- A6000/sm86 means Ampere primitives (`cp.async`, `mma.sync`, warp reductions, BF16 tensor cores),
+  not Blackwell TMA/WGMMA/FA4.
+- FA2 is the comparison baseline, but not the lineage acceptance threshold.
+- CUTLASS Ampere FA2 cues point toward 128x128 tiles, 128 threads, 16-byte alignment, Q/K/V staging
+  through `cp.async`, swizzled shared-memory layouts, tensor-core MMA, and online softmax.
+- SM80 FA code treats `NumThreads` as a tiled-MMA property, not as a proxy for unimplemented new
+  workload distribution.
+- `set_constexpr_int` and Python set transforms are contract-only; they must not claim new dataflow,
+  tiling, staging, scheduling, split-Q work, or async pipelines.
+- Recurring failures should become structural preflight tracks, not phrase bans.
+- Future `cp.async` attempts need aligned 16-byte groups, 8 BF16 elements per 16-byte group, disjoint
+  scalar tails, partial-tile guarding/zero-fill, and real overlap.
+- WMMA BF16 edits should preserve the local seed's supported 16x16x16 contract unless the kernel is
+  deliberately rewritten around a different TensorOp interface.
+- Current best accepted candidate: `kThreads=128`, full-target correctness, geomean
+  `7.777584666360881`.
+- `kThreads=64` is correct but slower: geomean `7.587127963961811`.
+- Isolated synchronous Q shared-memory staging is correct but slower: geomean
+  `6.722112165053056`.
+
+Verification:
+
+- `tests/test_knowledge.py` now exercises the real `knowledge/ampere.md` entry point and its sibling
+  corpus files.
+- The tests verify retrieval of high-value facts for:
+  - `cp.async` 16-byte/BF16/dataflow constraints;
+  - CUTLASS Ampere FA2 tile/thread/softmax cues;
+  - semantic transform mismatch and contract-only transforms;
+  - synchronous Q-staging regression evidence;
+  - FA2 baseline versus lineage threshold;
+  - WMMA 16x16x16 shape contract;
+  - rejected `kThreads=64` evidence.
+- A manifest-wide test parses every `Retrieval query:` from `knowledge/retrieval_claims.md` and
+  requires each query to retrieve the manifest context with `Why useful`.
+- A manual audit over all 11 manifest queries showed relevant top-3 chunks, for example:
+  - `Ampere sm86 A6000 ...` -> `retrieval_claims.md#0`, `ampere.md#0`;
+  - `Ampere cp.async 16-byte ...` -> `ampere.md#3`, `ampere.md#4`,
+    `retrieval_claims.md#1`;
+  - `synchronous Q shared memory staging regression ...` -> `retrieval_claims.md#2`,
+    `ampere.md#34`, `ampere.md#19`.
+- `.venv/bin/python -m pytest tests/test_knowledge.py -q`: passed, 14 tests.
+- `.venv/bin/python -m pytest -q`: passed, 311 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in the runtime repo.
+- Runtime commit `1c47fbcb42c0f3f2f6efb36daa68ded0e09ee60c` was pushed and fetch-verified on
+  `coder-2011/avo-ampere`.
+
+Decision:
+
+- The KB now contains explicit, useful, retrievable claims rather than only chronological notes.
+- The retrieval layer still needs more source depth, but the current corpus is test-covered enough to
+  use safely in the next planner loop.
