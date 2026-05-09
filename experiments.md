@@ -10774,3 +10774,65 @@ Decision:
 - The next useful semantic direction is either a real Ampere copy/layout/register pipeline
   (`cp.async` plus ldmatrix-compatible shared layout and overlap) or a broader FA2-like work
   decomposition such as wider 128x128 tiling.
+
+## 2026-05-09 - Checkpoint 4.89: Align compile diagnostics with score builds
+
+Success criteria for this checkpoint:
+
+- Run one more agent loop after adding the K-staging regression knowledge.
+- Classify the next failure mode.
+- Fix any root issue that is in the orchestrator/agent infrastructure rather than just adding a
+  one-off CUDA ban.
+
+Runtime loop:
+
+- Runtime loop file: `attempts/loop_after_k_staging_regression_knowledge.json`.
+- Result: no accepted candidate.
+- Step 1: the planner proposed a broader synchronous K/V shared-memory staging transform.
+  It compiled under standalone `avo compile` with:
+  - no spills;
+  - 40 registers;
+  - 1 barrier;
+  - 18112 bytes shared memory.
+- Step 2: the planner correctly scored the same transform with `edit_mode="transform"` and
+  `candidate_patch=""`, but score-time Torch extension compilation failed on the first case:
+  `__nv_bfloat16(0.0f)` is invalid when `__CUDA_NO_BFLOAT16_CONVERSIONS__` is defined.
+- This exposed an infrastructure mismatch: standalone compile diagnostics did not use the same
+  CUDA half/BF16 disabling macros as Torch extension builds.
+
+Runtime fix:
+
+- Runtime commit `8536974` (`fix: align compile diagnostics with score builds`) updates
+  `avo compile` to pass the Torch extension CUDA defines:
+  - `__CUDA_NO_HALF_OPERATORS__`;
+  - `__CUDA_NO_HALF_CONVERSIONS__`;
+  - `__CUDA_NO_BFLOAT16_CONVERSIONS__`;
+  - `__CUDA_NO_HALF2_OPERATORS__`.
+- The fix also records the compile/score contract in:
+  - `knowledge/ampere.md`;
+  - `knowledge/retrieval_claims.md`;
+  - `tests/test_knowledge.py`.
+- New retrieval query:
+  `compile score torch extension CUDA_NO_BFLOAT16_CONVERSIONS __nv_bfloat16 constructor`.
+
+Verification:
+
+- `uv run --extra cuda python -m avo compile --source candidates/cuda_mma_attention/attention_kernel.cu --out-dir build/strict_compile_contract --timeout-s 120`
+  passed with the stricter flags and the accepted seed still compiled at 40 registers, 1 barrier,
+  and 9920 bytes shared memory.
+- Focused runtime tests:
+  `.venv/bin/python -m pytest tests/test_compile.py tests/test_knowledge.py -q`
+  passed, 42 tests.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 350 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- Compile-only diagnostics are now a better proxy for score-time extension builds. This should
+  prevent another false compile success for BF16 constructor/conversion code that scoring later
+  rejects.
+- The synchronous K/V staging family remains unattractive. The next loop should move away from
+  immediate shared staging toward a real async/copy-layout/register-pipeline step or a wider
+  FA2-like tile/work decomposition.
