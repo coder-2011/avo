@@ -9121,3 +9121,56 @@ Verification:
 - `.venv/bin/python -m pytest`: passed, 262 tests.
 - `.venv/bin/ruff check .`: passed.
 - `git diff --check`: passed in both runtime and paper repos.
+
+## 2026-05-09 - Checkpoint 4.62: Seed controlled FA2 baseline
+
+Success criteria for this checkpoint:
+
+- Finish the controlled FlashAttention-2 install without broad upstream arch builds.
+- Seed the FA2 baseline on the realistic BF16 target suite rather than tiny smoke shapes.
+- Close the install reproducibility gap exposed by CUDA 13 Python wheels that ship only
+  `libcudart.so.13`.
+
+Observation:
+
+- The controlled source build with `FLASH_ATTN_CUDA_ARCHS=80`, `MAX_JOBS=3`, and
+  `NVCC_THREADS=1` compiled all CUDA objects but initially failed at link time:
+  `/usr/bin/ld: cannot find -lcudart`.
+- The CUDA runtime library existed under the Python-installed CUDA root as
+  `libcudart.so.13`, but the manual install environment did not include the link shim that AVO's
+  extension environment helper can create.
+
+Decision:
+
+- Added `avo baseline-env`, which emits shell exports for the exact baseline build environment:
+  CUDA root, `CUDACXX`, path variables, Ampere compile target, conservative parallelism limits, and
+  the local `libcudart.so` link shim when needed.
+- Updated the README and Ampere knowledge base so FA2 install uses:
+  `eval "$(uv run --extra cuda python -m avo baseline-env)"` before
+  `uv pip install flash-attn --no-build-isolation`.
+- Installed `flash-attn==2.8.3` successfully after the CUDA runtime link path was made visible.
+
+Seeded FA2 baseline:
+
+- Nested lineage commit: `9bd118e` (`chore: seed baseline`).
+- Command:
+  `uv run --extra cuda python -m avo seed-baseline ./lineage --backend flash-attn --seq-lens 4096,8192,16384,32768 --total-tokens 32768 --num-heads 16 --head-dim 128 --dtype bf16 --causal both --trials 3 --repeats 1 --warmup 1 --timeout-s 900 --force`
+- All 8 cases passed correctness.
+- Geomean: `109.82622931666803` TFLOPS.
+- Noncausal TFLOPS by sequence: 4096 `118.5607640200293`, 8192 `119.5489291820707`,
+  16384 `119.95136120842285`, 32768 `121.57214180377122`.
+- Causal TFLOPS by sequence: 4096 `101.4267666135992`, 8192 `104.82817098455511`,
+  16384 `100.61461165062543`, 32768 `95.7262425503512`.
+
+Verification:
+
+- `.venv/bin/python -c "import flash_attn; print(getattr(flash_attn, '__version__', 'no_version'))"`:
+  printed `2.8.3`.
+- `uv run --extra cuda python -m avo env --env-file ../avo/.env.local`: reported
+  `flash_attn_installed: true` and exact CUDA 13.0 Torch/NVCC compatibility.
+- `uv run --extra cuda python -m avo baseline-env --format json`: emitted the selected CUDA 13 root
+  and build environment.
+- `.venv/bin/python -m pytest tests/test_cli.py -q`: passed, 24 tests.
+- `.venv/bin/python -m pytest`: passed, 264 tests.
+- `.venv/bin/ruff check .`: passed.
+- `git diff --check`: passed in both runtime and paper repos.
