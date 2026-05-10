@@ -11414,3 +11414,39 @@ Decision:
   fragment loads by keeping Q in WMMA fragments across the key-tile loop.
 - Future search should preserve this Q-in-register reuse while exploring K/V traffic, PV/softmax
   scheduling, or broader FA2-like pipelining.
+
+## 2026-05-10 - Checkpoint 4.99: Surface unavailable profiling before planning
+
+Success criteria for this checkpoint:
+
+- Avoid wasting agent planning retries on `avo profile` when the current runtime already marks
+  Nsight/CUPTI profiling as unsupported.
+- Keep profile validation in place for safety; this is planner context, not a replacement for the
+  command validator.
+- Verify prompt/context construction with tests.
+
+Runtime fix:
+
+- `build_repo_context` now checks the same Thunder runtime marker used by profile validation.
+- When the marker exists, the bounded-command context says `avo profile is unavailable in this
+  runtime`.
+- The profile guidance line now says not to choose `avo profile` under the Thunder-backed execution
+  environment and to use `score` or compile a `candidate_transform` instead.
+- When the marker is absent, the normal `avo profile` guidance remains available.
+
+Verification:
+
+- Focused tests:
+  - repo context lists local candidates as before;
+  - repo context marks profile unavailable when a mocked Thunder marker exists.
+- Runtime checks:
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+- A full runtime suite had just passed after the accepted candidate checkpoint:
+  - `.venv/bin/python -m pytest -q`: passed, 374 tests after adding the focused context test.
+
+Decision:
+
+- This addresses the planning-validation failure seen in the accepted-candidate loop without adding
+  another reactive ban. The runtime fact is now in the planner's first context, and the existing
+  validator remains the hard boundary if the planner still asks for profile.
