@@ -14157,3 +14157,53 @@ Decision:
 
 - Keep empty-case rejection in both places: the score payload should not claim correctness without
   cases, and the lineage gate should still reject malformed or empty score payloads defensively.
+
+## 2026-05-10 - Checkpoint 5.52: Prefer native batch transform steps
+
+Sources checked:
+
+- Anthropic tool-use documentation,
+  `https://docs.anthropic.com/en/docs/build-with-claude/tool-use/`
+  - Useful fact: client tools are defined with an `input_schema`, and strict tool use can make tool
+    inputs follow that schema.
+- Anthropic define-tools documentation,
+  `https://docs.anthropic.com/en/docs/build-with-claude/tool-use/implement-tool-use`
+  - Useful fact: examples and descriptions matter for complex tools with nested objects or
+    format-sensitive fields.
+
+Change:
+
+- Runtime `avo/agent.py` now exposes native `candidate_transform.steps` in the strict Anthropic
+  tool schema for `op=batch`.
+- `steps_json` remains accepted as a legacy fallback for old attempt records and plain JSON
+  fallback responses, but the prompt and repo context now tell the planner to use a native `steps`
+  array.
+- Runtime README documents the preferred native `steps` array and the legacy fallback.
+
+Why:
+
+- The parser and materializer already supported native batch `steps`, but the tool schema only
+  advertised `steps_json`. That made the planner put structured edit steps inside a JSON string,
+  which is a brittle interface for the exact problem we are trying to solve: reliable,
+  executable, reviewable semantic transforms.
+- This is not a broader transform language and not a new CUDA guard. It makes the existing
+  structured-transform interface easier for the Anthropic tool call to satisfy.
+
+Verification:
+
+- Focused interface tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_decision_tool_uses_strict_schema tests/test_agent.py::test_parse_variation_decision_accepts_transform_batch tests/test_agent.py::test_parse_variation_decision_applies_batch_default_path tests/test_agent.py::test_build_repo_context_lists_local_candidates tests/test_agent.py::test_build_variation_prompt_includes_repo_context -q`:
+    passed, 5 tests.
+- Agent suite:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 201 tests.
+- Affected agent/CLI/evolve suites:
+  - `.venv/bin/python -m pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`:
+    passed, 343 tests.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Prefer native nested JSON for semantic batch transforms. Keep `steps_json` only for backward
+  compatibility and fallback response parsing.
