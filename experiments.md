@@ -13593,3 +13593,82 @@ Decision:
 - Do not add a new CUDA guard for this failure. The candidate had a recoverable transform
   materialization issue, not an invalid CUDA hypothesis. Let the batch reach compile/correctness
   when it contains at least one real source change.
+
+## 2026-05-10 - Checkpoint 5.42: Pending scores survive older repair scores
+
+Sources checked:
+
+- RepairAgent, `https://arxiv.org/pdf/2403.17134`
+  - Useful pattern: keep a dynamic prompt with the last executed command/result and let the
+    agent interleave information gathering, repair attempts, and validation.
+  - Tool-mediated repair should apply a candidate, run validation, and revert failed attempts so
+    the next attempt starts from clean source.
+- LLMLOOP, `https://www.arxiv.org/pdf/2603.23613`
+  - Useful pattern: every generated code change re-enters the compilation loop before later
+    validation stages. Compilation and test failures are fed back as structured context.
+- CYCLE, `https://arxiv.org/abs/2403.18746`
+  - Useful reminder: self-refinement depends heavily on the quality of execution feedback; the
+    system should preserve the exact failed edit and validation result, not drown repair in stale
+    unrelated failures.
+
+Loop command:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=180 timeout 14400 .venv/bin/python -m avo evolve-loop
+  --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local
+  --timeout-s 3600 --max-steps 6 --compile-repair-attempts 4 --attempts-dir ./attempts
+  --attempt-limit 500 --loop-json attempts/loop_after_noop_batch_tolerance_20260510T1913Z.json`
+
+Loop result:
+
+- The first three steps repeated a previously scored unaccepted transform and were rejected by
+  attempt-memory validation.
+- Step 4 escaped that repetition. A repair path produced a new V-fragment prefetch transform that
+  compiled successfully as `build/mma_v_pipeline_prefetch_v1`.
+- The final compile-only transform stayed unresolved because pending-transform detection treated
+  older score payloads inside the same step's `repair_attempts` as if they had scored the newer
+  final compile-only transform.
+- Steps 5 and 6 then planned unrelated invalid transforms instead of draining the pending compile
+  into a score.
+
+Change:
+
+- Runtime `avo/evolve.py` now identifies scored transforms by matching the score attempt's
+  `candidate_transform` identity, including repair attempts.
+- Pending compile detection now checks whether the final attempt in a step is a successful
+  compile-only transform before letting older repair score payloads clear pending state.
+
+Validation run:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=120 timeout 7200 .venv/bin/python -m avo evolve-loop
+  --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local
+  --timeout-s 3600 --max-steps 1 --compile-repair-attempts 2 --attempts-dir ./attempts
+  --attempt-limit 500 --loop-json attempts/loop_after_pending_score_order_fix_20260510T1931Z.json`
+
+Validation result:
+
+- The loop correctly scored the pending V-fragment prefetch transform.
+- The candidate was correct on all 8 validation cases.
+- It regressed geomean throughput from `9.507832270603132` to `9.419589865765866` TFLOPS, so the
+  gate rejected it and cleanup reverted the patch.
+- A follow-up `pending_compile_only_transform(Path("attempts"))` returned `None`.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q -k "pending_compile_transform or repeated_compile_only_transform or repeated_scored_unaccepted_transform"`:
+    passed, 4 tests.
+- Affected suites and hygiene:
+  - `.venv/bin/python -m pytest tests/test_evolve.py tests/test_cli.py -q`:
+    passed, 136 tests.
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 418 tests.
+
+Decision:
+
+- This was a history-ordering bug, not a CUDA preflight problem. A score should clear a pending
+  transform only when the score belongs to that same transform, or when it is a later step in the
+  attempt stream.
+- Keep the V-fragment prefetch rejected by measurement, not by a new guard: it was correct but
+  slower on the target A6000 validation workload.
