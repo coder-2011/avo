@@ -12244,3 +12244,38 @@ Decision:
   for this seed.
 - The no-op revert-after-cleanup behavior is still a follow-up reliability issue; the loop should
   classify a failed scored family and move on rather than trying to revert an already-clean source.
+
+## 2026-05-10 - Checkpoint 5.16: Correctness repair prompt rejects revert-only thinking
+
+Success criteria for this checkpoint:
+
+- Address the no-op revert behavior observed after the failed 32-thread lane-index score.
+- Keep the change as planner feedback rather than a brittle phrase ban.
+- Verify the repair prompt and full runtime suite.
+
+Change:
+
+- Runtime `avo/cli.py` correctness-repair feedback now says cleanup has already restored the clean
+  pre-edit source.
+- It explicitly tells the planner not to return a revert-only repair because the repair payload must
+  make a real source change against the current source.
+- If the failed family should be abandoned, the prompt directs the planner to choose a different
+  coherent transform family instead of restoring baseline code.
+
+Verification:
+
+- Focused CLI correctness-repair test:
+  - `.venv/bin/python -m pytest tests/test_cli.py::test_evolve_once_repairs_candidate_correctness_failure_before_finishing -q`: passed.
+- Lint:
+  - `.venv/bin/ruff check avo/cli.py tests/test_cli.py`: passed.
+- Grouped runtime tests:
+  - `.venv/bin/python -m pytest tests/test_cli.py tests/test_agent.py tests/test_knowledge.py -q`: passed, 267 tests.
+- Patch hygiene:
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 384 tests.
+
+Decision:
+
+- This keeps correctness repair available, but makes the interface clearer: repair means a revised
+  executable semantic move on clean source, not undoing a patch the loop already cleaned up.
