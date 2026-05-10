@@ -15002,3 +15002,44 @@ Decision:
 
 - Keep repair guidance class-specific. If another failure class needs directed guidance, add it
   only after a concrete loop trace shows the generic repair prompt is too ambiguous.
+
+## 2026-05-10 - Checkpoint 5.69: Mirror async-copy guidance for score-time builds
+
+Change:
+
+- Score-time compile-repair prompts now reuse the same async-copy guidance when the score error
+  summary mentions `cp.async`, `__pipeline*`, or `cuda::memcpy_async`.
+- The existing score-time extension-build repair test now covers this case by simulating an
+  undefined `__pipeline_memcpy_async` error inside a score payload.
+
+Why:
+
+- Some CUDA extension build failures surface only during `avo score`, not during `avo compile`.
+  Those failures carry `failure_class=score_time_compile_failure`, so the class-specific compile
+  prompt from Checkpoint 5.68 would not fire.
+- Mirroring the guidance based on the score error text keeps async-copy repairs consistent without
+  changing failure-class promotion or structural preflight behavior.
+
+Provider status:
+
+- No Anthropic planner call was made for this checkpoint. Anthropic live loops remain blocked by
+  the low-credit error recorded in Checkpoint 5.65.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_cli.py::test_evolve_once_repairs_score_time_extension_build_failure_before_finishing tests/test_cli.py::test_compile_repair_prompt_gives_async_copy_guidance tests/test_knowledge.py -q`: passed, 55 tests.
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_evolve.py tests/test_agent.py tests/test_knowledge.py -q`:
+    passed, 405 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 457 tests.
+
+Decision:
+
+- Detect async-copy score-time guidance from the captured error text, not by adding a new
+  score-time failure class. The score-time class still correctly describes where the failure
+  surfaced.
