@@ -12333,3 +12333,40 @@ Decision:
 - This makes the loop more likely to move away from exhausted work-mapping families after repeated
   measured regressions, while still allowing a future thread/work-mapping candidate if it changes the
   actual dataflow, synchronization, or validation contract.
+
+## 2026-05-10 - Checkpoint 5.18: Accept kThreads=96 after family-guided loop
+
+Success criteria for this checkpoint:
+
+- Run the evolve loop after adding semantic-family feedback for repeated work-mapping attempts.
+- Confirm whether the planner can carry a compiled candidate forward to scoring.
+- Accept only a correctness-passing target-workload improvement.
+
+Result:
+
+- Loop command:
+  - `timeout 28800 .venv/bin/python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s 7200 --max-steps 10 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 80 --loop-json attempts/loop_after_work_mapping_family_signal_20260510T0707Z.json`
+- The loop stopped after 8 completed steps with `accepted=true`.
+- Accepted candidate:
+  - `candidates/cuda_mma_attention/attention_kernel.cu`: `constexpr int kThreads = 64;` to
+    `constexpr int kThreads = 96;`
+- Gate:
+  - Previous best geomean: `9.168741394385114` TFLOPS.
+  - Candidate geomean: `9.451443582484515` TFLOPS.
+  - Correctness: passed all target large-shape BF16 cases scored by the loop.
+
+Observed loop behavior:
+
+- The planner did move beyond the exact earlier `kThreads=32/128` and query-tile attempts, but it
+  still produced some malformed or self-invalid structured transforms before reaching the accepted
+  candidate.
+- The loop successfully preserved a compile-only candidate across the follow-up scoring step instead
+  of losing the pending transform.
+- The accepted improvement is small but valid: a scoped occupancy retune on the realistic target
+  workload, not a tiny-shape artifact.
+
+Decision:
+
+- Keep the accepted `kThreads=96` retune as the new runtime candidate.
+- The next loop-mechanics fix should focus on historical failure context and self-invalid risk text:
+  the planner can still mention prior invalid attempts in a way that trips current-attempt validation.
