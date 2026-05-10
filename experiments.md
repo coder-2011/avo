@@ -13739,6 +13739,14 @@ Verification:
   - `git diff --check`: passed.
 - Full runtime suite:
   - `.venv/bin/python -m pytest -q`: passed, 420 tests.
+- Actual provider-failure smoke:
+  - `AVO_AGENT_REQUEST_TIMEOUT_S=60 timeout 900 .venv/bin/python -m avo evolve-loop
+    --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local
+    --timeout-s 300 --max-steps 1 --compile-repair-attempts 1 --attempts-dir ./attempts
+    --attempt-limit 550 --loop-json attempts/loop_after_provider_failure_handling_20260510Tsmoke.json`:
+    exited `2` with a normal loop payload.
+  - The smoke recorded one planning-failure step for the Anthropic low-credit `BadRequestError`
+    and wrote both the step record and loop JSON instead of crashing.
 
 Decision:
 
