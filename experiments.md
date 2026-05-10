@@ -14670,3 +14670,51 @@ Decision:
 
 - Keep environment failures such as missing Ninja or missing CUDA out of repair routing, but treat
   actual candidate extension build output from `nvcc`/Ninja as repairable compile feedback.
+
+## 2026-05-10 - Checkpoint 5.62: Add supervisor strategy-reset hints
+
+External source checked:
+
+- `Wink: Recovering from Misbehaviors in Coding Agents`,
+  `https://www.arxiv.org/pdf/2602.17037`
+  - Useful fact: production coding-agent loops benefit from trajectory observers that detect
+    recurring misbehaviors, then inject targeted course-correction guidance rather than relying on
+    the agent to notice loops by itself.
+
+Change:
+
+- Runtime attempt-history summaries now add `Strategy reset candidates` when an existing
+  supervisor or semantic-family signal detects stagnation.
+- The reset hint remains broad and non-prescriptive: work decomposition/query-tile ownership,
+  memory layout plus vectorized K/V pipeline, register/online-softmax scheduling, or a
+  bottleneck-directed no-edit diagnostic.
+- The hint also names recent transform families to avoid repeating unchanged.
+- README, Ampere knowledge, and the retrieval-claim index now describe the strategy-reset signal.
+
+Why:
+
+- The previous supervisor signal correctly detected repeated command/edit fingerprints, recurring
+  failure classes, recurring semantic families, and exhaustion, but its guidance mostly said "try a
+  materially different direction."
+- The architecture doc calls for supervisor intervention that suggests several new candidate
+  directions without prescribing a specific patch. This change moves closer to that: it gives the
+  planner broad Ampere search families while still requiring the next action to be a scoped,
+  source-verifiable `candidate_transform` or a diagnostic tied to a concrete bottleneck.
+
+Verification:
+
+- Focused supervisor tests:
+  - `uv run pytest tests/test_evolve.py::test_summarize_attempt_history_flags_recurring_transform_family tests/test_evolve.py::test_summarize_attempt_history_flags_unaccepted_exhaustion tests/test_evolve.py::test_summarize_attempt_history_flags_repeated_unaccepted_attempts tests/test_evolve.py::test_summarize_attempt_history_classifies_provider_failure_without_supervisor_signal -q`:
+    passed, 4 tests.
+- Affected suites:
+  - `uv run pytest tests/test_evolve.py tests/test_knowledge.py -q`:
+    passed, 152 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Keep the supervisor reset deterministic and broad for now. Do not add an LLM supervisor call or
+  a large rule tree; the current step should improve search-loop guidance without becoming another
+  reactive ban list.
