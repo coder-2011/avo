@@ -12477,3 +12477,50 @@ Decision:
 
 - The syncwarp candidate is no longer only a one-sample gate win; keep it as confirmed current
   runtime state.
+
+## 2026-05-10 - Checkpoint 5.21: Fix transform-family classifier priority
+
+Success criteria for this checkpoint:
+
+- Ensure semantic-family memory reflects the actual transform family, not incidental CUDA context.
+- Prevent cooperative `blockDim.x` loops from being mislabeled as thread-count/work-mapping edits.
+- Keep exact `kThreads`/`kWarps` retunes classified as thread-count work even when diff context
+  contains shared-memory declarations.
+- Classify accepted `__syncwarp` edits as synchronization/barrier work.
+
+Issue:
+
+- The real attempt summary after Checkpoint 5.20 labeled K/KV shared-staging, async-copy, and
+  syncwarp attempts as `thread_count_or_warp_mapping` because the classifier treated `blockDim.x`
+  and noisy diff context as thread-work signals.
+
+Change:
+
+- Runtime `avo/evolve.py` now prioritizes exact `kThreads`/`kWarps` constexpr retunes first.
+- Runtime `avo/evolve.py` now classifies async-copy, `__syncwarp`, shared-memory staging, and
+  generic barriers before broad thread-work text.
+- Removed bare `blockDim.x` as a thread-count family trigger.
+- Added regression tests for shared staging with `blockDim.x`, syncwarp edits, and noisy shared
+  context around `kThreads` retunes.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_keeps_blockdim_shared_staging_family tests/test_evolve.py::test_summarize_attempt_history_classifies_syncwarp_family tests/test_evolve.py::test_summarize_attempt_history_flags_thread_count_family tests/test_evolve.py::test_summarize_attempt_history_flags_recurring_transform_family -q`: passed, 4 tests.
+- Evolve tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 82 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/evolve.py tests/test_evolve.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 390 tests.
+- Real attempt-history check:
+  - K/KV staging attempts now show `family=shared_memory_staging`.
+  - Async K staging now shows `family=async_copy_pipeline`.
+  - `kThreads=96`/`kThreads=128` retunes now show `family=thread_count_or_warp_mapping`.
+  - The accepted syncwarp compile/score now shows `family=synchronization_or_barrier`.
+
+Decision:
+
+- This improves the search loop's memory without adding a new ban. Future planner guidance should
+  now steer away from exhausted shared-staging families without misclassifying unrelated CUDA edits.
