@@ -13672,3 +13672,77 @@ Decision:
   attempt stream.
 - Keep the V-fragment prefetch rejected by measurement, not by a new guard: it was correct but
   slower on the target A6000 validation workload.
+
+## 2026-05-10 - Checkpoint 5.43: Planner provider failures are recorded
+
+Sources checked:
+
+- ARCS, `https://arxiv.org/html/2504.20434v2`
+  - Useful pattern: run a budgeted synthesize-execute-repair loop, retrieve relevant evidence,
+    execute candidates in a sandbox, encode execution feedback for targeted revision, and stop
+    under an explicit budget.
+- RepairAgent, `https://arxiv.org/pdf/2403.17134`
+  - Useful pattern already relevant to AVO: apply a candidate, run validation, revert failed
+    attempts, and feed the actual command/test output into the next repair decision.
+- Local async-copy knowledge and tests:
+  - `knowledge/ampere.md` and `knowledge/b/cuda_programming_practice.md` already treat narrow
+    async-copy granularity as an advisory, not a hard rejection. Hard rejections remain for
+    structural failures such as invalid async pipeline lifecycle or no-effect helper stubs.
+
+Loop command:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=180 timeout 14400 .venv/bin/python -m avo evolve-loop
+  --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local
+  --timeout-s 3600 --max-steps 8 --compile-repair-attempts 4 --attempts-dir ./attempts
+  --attempt-limit 550 --loop-json attempts/loop_after_pending_score_clear_20260510T1936Z.json`
+
+Loop result:
+
+- Step 1 scored a `kThreads=112` retune. It was correct but regressed geomean throughput to
+  `8.898204721209686` TFLOPS versus the current best `9.507832270603132`, so the gate rejected
+  it and cleanup succeeded.
+- Step 2 failed planning validation because the prose claimed reduced or reused Q loads, while
+  the executable `candidate_transform` did not make that semantic move.
+- Step 3 failed planning validation for the same kind of mismatch around V-load reuse.
+- A later step was interrupted before a loop JSON was written because the Anthropic request raised
+  a provider error: low credit balance. No evolve, score, compile, `nvcc`, or `ninja` process was
+  still running afterward.
+
+Change:
+
+- Runtime `avo/cli.py` now catches exceptions from the planner provider call in the initial
+  evolve step and converts them to `planning_failure_step`.
+- Runtime `avo/cli.py` does the same for compile/correctness repair planner calls, preserving the
+  failed attempt in `repair_attempts` so the orchestrator records what it was trying to repair.
+- Validation errors from the planner payload still flow through the existing `ValueError` path.
+  Command execution, compile, score, and cleanup failures keep their existing behavior.
+
+Why:
+
+- A provider/API outage is not a CUDA hypothesis failure, but it should still become durable loop
+  evidence. The loop should not disappear without a step record after a long run.
+- This is consistent with the repair-loop direction: keep the source tree clean, record the exact
+  failed action and feedback, and let future budgeted attempts continue from known state.
+
+Verification:
+
+- Focused provider tests:
+  - `.venv/bin/python -m pytest tests/test_cli.py -q -k "provider_exception or planner_provider"`:
+    passed, 2 tests.
+- Affected repair/evolve tests:
+  - `.venv/bin/python -m pytest tests/test_cli.py -q -k "evolve_once or repair_loop"`:
+    passed, 9 tests.
+  - `.venv/bin/python -m pytest tests/test_evolve.py tests/test_cli.py -q`:
+    passed, 138 tests.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 420 tests.
+
+Decision:
+
+- Do not add another CUDA ban or async-copy hard guard for this incident. The failed run exposed
+  orchestration fragility, not an invalid kernel transformation.
+- Keep async-copy granularity soft: prefer 16-byte vector groups for throughput, but only reject
+  async-copy patches when the executable dataflow violates a structural invariant.
