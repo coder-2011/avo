@@ -12414,3 +12414,52 @@ Decision:
   lifecycle, unsupported WMMA contracts, disconnected helpers, and stale symbols.
 - It avoids blocking repairable async-copy experiments solely because they used scalar BF16 copy
   size while the agent is still developing a coherent pipeline.
+
+## 2026-05-10 - Checkpoint 5.20: Accept score-store syncwarp refinement
+
+Success criteria for this checkpoint:
+
+- Validate the async-copy/preflight softening by running a longer evolve loop.
+- Keep the loop on realistic target shapes.
+- Accept only a correctness-passing throughput improvement.
+- Record both accepted and rejected transform families as search evidence.
+
+Loop command:
+
+- `timeout 36000 .venv/bin/python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s 9600 --max-steps 16 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 96 --loop-json attempts/loop_after_async_preflight_softening_20260510T0804Z.json`
+
+Result:
+
+- The loop stopped after 12 completed steps with `accepted=true`.
+- Accepted candidate:
+  - `candidates/cuda_mma_attention/attention_kernel.cu`: add `__syncwarp();` immediately before
+    the existing `__syncthreads();` after `wmma::store_matrix_sync(scores, ...)`.
+- Gate:
+  - Previous best geomean: `9.451443582484515` TFLOPS.
+  - Candidate geomean: `9.507832270603132` TFLOPS.
+  - Correctness: passed all 8 target large-shape BF16 cases.
+
+Useful negative evidence:
+
+- Cooperative K/V shared staging with padding passed correctness but regressed to
+  `3.640496322360991` TFLOPS.
+- `kThreads=128` passed correctness but regressed to `9.16374468686178` TFLOPS versus the current
+  `kThreads=96` candidate.
+- Single-stage K async-copy staging compiled, then failed target scoring with CUDA launch/unknown
+  errors and geomean `0.0`.
+- K-only shared staging passed correctness but regressed to `3.6932886091263213` TFLOPS.
+
+Loop behavior:
+
+- The planner recovered from an invalid request for profiler metrics through `avo score`.
+- The loop carried compile-only candidates forward to scoring for K/V staging, `kThreads=128`,
+  async K staging, K-only staging, and the accepted syncwarp transform.
+- The new self-invalid risk filter rejected a candidate whose own risk text predicted incorrect
+  stage indexing before wasting a compile.
+
+Decision:
+
+- Keep `kThreads=96` and the score-store `__syncwarp()` refinement as the current runtime state.
+- Treat plain synchronous K/KV staging as exhausted negative evidence for this seed.
+- Future async-copy work should focus on correct stage lifecycle and initialized-data guarantees,
+  not copy width alone.
