@@ -13292,3 +13292,64 @@ Decision:
 
 - Keep this as guidance and feedback, not another narrow hard CUDA ban. Existing validators still
   reject objective mismatches; the prompt should reduce the chance that the planner emits them.
+
+## 2026-05-10 - Checkpoint 5.37: Source-verifiable prompt loop and score-environment repair fix
+
+Command:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=90 timeout 14400 .venv/bin/python -m avo evolve-loop --lineage
+  ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s
+  3600 --max-steps 6 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 340
+  --loop-json attempts/loop_after_source_verifiable_prompt_20260510T1550Z.json`
+
+Loop result:
+
+- The loop finished at `max_steps` with `accepted=false`.
+- No background evolve, score, compile, worker, `nvcc`, or `python -m avo` process remained after
+  the run.
+- Step 1 compiled `mma_q_hoist_sync_v1`. This was a source-verifiable transform shape, but the
+  actual materialized patch only added a `__syncthreads()` after already-hoisted Q fragment loads,
+  so it did not implement the stated Q-hoist semantic move.
+- Step 2 was rejected by planning validation because the planner described its own transform as a
+  predicted correctness failure.
+- Step 3 compiled `mma_q_shared_coop_v2`, which added shared Q tile storage, a cooperative Q load
+  before the key loop, and changed the WMMA Q fragment source to shared memory.
+- Step 4 scored that Q shared-memory staging transform with confirmed timing (`warmup=2`,
+  `repeats=3`). It was correct but regressed to `9.19933585352861` geomean TFLOPS versus current
+  best `9.507832270603132`.
+- Step 5 compiled `mma_remove_score_sync_v1`, a concrete synchronization-removal transform.
+- Step 6 failed planning validation after one repair attempt. The repair attempt scored a
+  `kThreads=64` transform, but the score payload reported `RuntimeError: CUDA is not available`
+  for every case even though `nvidia-smi` and a follow-up `avo env` showed CUDA healthy
+  immediately after the loop.
+
+Change:
+
+- Runtime `avo/evolve.py` now treats score-environment failures as non-repairable by the
+  correctness self-repair path.
+- `score_environment_error` attempts still appear in attempt summaries, but the loop no longer
+  asks the planner to repair the CUDA candidate as if the kernel produced wrong math.
+
+Verification:
+
+- Post-loop health checks:
+  - `nvidia-smi --query-gpu=name,compute_cap,utilization.gpu,memory.used --format=csv,noheader`:
+    `NVIDIA RTX A6000, 8.6, 0 %, 3 MiB`.
+  - `.venv/bin/python -m avo env`: `torch.cuda_available=true`, target `sm_86`.
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_score_environment_error_is_not_repairable_correctness_failure tests/test_evolve.py::test_summarize_attempt_history_classifies_score_environment_error -q`:
+    passed, 2 tests.
+- Affected suite:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 91 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/python -m ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 409 tests.
+
+Decision:
+
+- Keep the source-verifiable prompt rule. It improved the shape of emitted transforms, though it
+  does not guarantee the planner's prose perfectly matches the materialized edit.
+- Treat transient CUDA availability and build-environment score failures as orchestration
+  substrate failures, not correctness failures requiring CUDA source repair.
