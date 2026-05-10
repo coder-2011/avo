@@ -11007,3 +11007,96 @@ Decision:
   but slower on the long-sequence target lane.
 - The next root issue is planner behavior around unsupported diagnostics and prose-only repairs, not
   CUDA compilation or score infrastructure.
+
+## 2026-05-10 - Checkpoint 4.93: Bound profiler diagnostics and score pending transforms
+
+Success criteria for this checkpoint:
+
+- Add a bounded profiler diagnostic without letting Nsight/CUPTI failures hang the evolve loop.
+- Prevent unsupported profiler requests from consuming repeated loop steps in the Thunder runtime.
+- Make pending compile-only structured transforms reliably carry forward into score steps, including
+  when the planner emits placeholder prose in `candidate_patch`.
+- Keep CUDA preflight structural checks from overfitting: hard-reject only clearly scalar BF16
+  async-copy calls, and let broader async-copy hypotheses reach compile/repair.
+- Run a higher-budget evolve loop and verify that it uses compile/score/self-repair instead of
+  stalling on profile or losing the pending transform.
+
+Research consulted:
+
+- NVIDIA Nsight Compute CLI documentation:
+  `https://docs.nvidia.com/nsight-compute/NsightComputeCli/`
+- NVIDIA Nsight Compute Profiling Guide:
+  `https://docs.nvidia.com/nsight-compute/ProfilingGuide/`
+- Local runtime observation: `ncu` exists, but in this container the Thunder CUDA shim aborts CUPTI
+  queries with an unsupported-runtime error. The implementation therefore treats profiling as a
+  best-effort diagnostic and reports structured unavailability before launch when the Thunder marker
+  is present.
+
+Runtime fixes:
+
+- Added `avo profile`:
+  - wraps the isolated `worker-score` command in Nsight Compute;
+  - supports candidate-only profiling with score-shaped workload flags;
+  - emits structured JSON with profiler settings, score payload when available, and classified
+    profiler errors such as `ncu_not_found`, `profiler_permission`,
+    `profiler_unsupported_runtime`, `no_kernels_profiled`, and `timeout`;
+  - caps the profiler subprocess at 120 seconds even if a larger score timeout is requested.
+- Added planner validation for `avo profile`:
+  - only candidate profiling is allowed;
+  - profile commands require profiler intent, not correctness/timing intent;
+  - this Thunder-backed runtime rejects profile decisions during validation so the planner must repair
+    the decision before a loop step is spent.
+- Fixed pending-transform score follow-up:
+  - the payload normalizer now attaches the latest pending compile-only `candidate_transform` even
+    if the planner emits a non-diff placeholder in `candidate_patch`;
+  - this keeps the exact structured edit attached to the score command instead of scoring the
+    unmodified seed or failing as a prose-only edit.
+- Relaxed the async-copy granularity preflight:
+  - it still rejects clearly scalar BF16 async-copy calls such as
+    `__pipeline_memcpy_async(..., sizeof(__nv_bfloat16))`;
+  - it no longer rejects broader grouped-size async-copy hypotheses solely because they mention
+    `sizeof(__nv_bfloat16)`, so compile/self-repair can classify those attempts.
+
+Long-loop observations:
+
+- `attempts/loop_higher_budget_20260509T2010Z.json` ran with:
+  - `--max-steps 8`;
+  - `--timeout-s 1800`;
+  - `--compile-repair-attempts 4`.
+- The loop completed all 8 steps, accepted no candidate, and stopped at `max_steps`.
+- Step 1 scored the pending K shared-memory staging transform:
+  - `all_correct=true`;
+  - geomean `4.1946 TFLOPS`;
+  - rejected as a throughput regression versus best candidate geomean `7.7776 TFLOPS`.
+- Steps 2, 5, and 6 compiled async/shared K-staging variants successfully, with cleanup after
+  rejected compile-only checks.
+- Step 7 scored another cooperative K shared-memory staging variant:
+  - `all_correct=true`;
+  - geomean `4.1529 TFLOPS`;
+  - rejected as a throughput regression.
+- Step 8 still ended in a prose-only planning failure after three retries. The loop is now past the
+  profile trap and can score pending transforms, but planner discipline around executable
+  `candidate_transform` payloads still needs more work.
+
+Verification:
+
+- Runtime full suite:
+  - `.venv/bin/python -m pytest -q`: passed, 372 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+- Focused coverage added for:
+  - `avo profile` command construction and classified profiler failures;
+  - profile validation and unsupported-runtime rejection;
+  - profile attempt-history classification;
+  - pending-transform normalization when the planner emits a placeholder patch string;
+  - relaxed async-copy granularity preflight.
+
+Decision:
+
+- `avo profile` is useful as a bounded diagnostic interface, but not as a required part of the
+  current Thunder runtime search loop.
+- The loop is closer to the desired behavior: compile-only semantic transforms can be scored without
+  human repair, and unsupported profiling no longer consumes repeated long steps.
+- The next root issue is still planner payload discipline: after several rejected/regressed steps,
+  it can regress to prose-only transform descriptions. That should be handled by improving the
+  search loop and repair prompt, not by adding a larger brittle ban list.
