@@ -13860,3 +13860,56 @@ Decision:
 - Do not attempt a full Python dependency graph or dynamic import tracer yet. Static direct-local
   import capture plus a content manifest is enough to close the current accepted-artifact audit gap
   without making scoring slower or less deterministic.
+
+## 2026-05-10 - Checkpoint 5.46: Stop evolve loops on planner provider outages
+
+Sources checked:
+
+- Wink: Recovering from Misbehaviors in Coding Agents, `https://www.arxiv.org/pdf/2602.17037`
+  - Useful pattern: coding-agent failures should be classified from the trajectory, and targeted
+    course-correction should be injected only for failures the agent can recover from. Repeating
+    the same failed tool/provider interaction is treated as a misbehavior pattern, not useful
+    exploration.
+- MemoCoder, `https://arxiv.org/pdf/2507.18812`
+  - Useful pattern: a supervisory/mentor layer should distinguish recurring error patterns and
+    update repair strategy over time. Persistent failure classes are memory signals, but not every
+    class should become a code-preflight guard.
+
+Change:
+
+- Runtime `avo/evolve.py` now exposes `failure_class_for_step(step)` so loop control can make
+  decisions from the same classified attempt taxonomy used by attempt summaries.
+- Runtime `avo/cli.py` now stops `evolve-loop` with
+  `stopped_reason=planner_provider_error` after a recorded planner provider/API outage.
+- The loop still writes the failed planning step to `--attempts-dir` and the loop JSON before
+  stopping, so the outage remains auditable without spending the rest of a long run budget on the
+  same Anthropic/API billing or availability failure.
+- README now documents that provider outages stop the loop because repeating them cannot improve
+  CUDA search.
+
+Why:
+
+- The previous provider-failure work correctly classified Anthropic/API outages as
+  `planner_provider_error` and kept them out of CUDA preflight promotion, but a large
+  `--max-steps` loop would still keep calling the provider after the first recorded outage.
+- That is the wrong response for an infrastructure class. Compile/correctness failures should go
+  through self-repair; provider availability failures should be recorded and stop the current run
+  so they do not pollute attempt history or consume budget.
+
+Verification:
+
+- Focused loop-control tests:
+  - `.venv/bin/python -m pytest tests/test_cli.py::test_evolve_loop_stops_after_planner_provider_error tests/test_cli.py::test_evolve_loop_records_planning_validation_failure tests/test_cli.py::test_evolve_loop_runs_until_accepted_and_records_attempts -q`:
+    passed, 3 tests.
+- Affected CLI suite:
+  - `.venv/bin/python -m pytest tests/test_cli.py -q`: passed, 42 tests.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed in both runtime and lab-notebook repos.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 423 tests.
+
+Decision:
+
+- Keep CUDA/search failures repairable inside the evolve loop, but stop immediately on classified
+  planner provider/API outages after recording the step. This is a stop policy, not a CUDA guard.
