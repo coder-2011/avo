@@ -14049,3 +14049,63 @@ Decision:
   infrastructure stops, not CUDA search failures and not reasons to add new preflight guards.
 - Resume live evolution when Anthropic credits are available; the loop command shape is otherwise
   ready for a longer run.
+
+## 2026-05-10 - Checkpoint 5.50: Budget invalid-decision retry feedback
+
+Sources checked:
+
+- Local reference agent: `pi-mono-agent/packages/agent/README.md` and
+  `pi-mono-agent/packages/agent/src/agent.ts`
+  - Useful pattern: context transforms happen before provider conversion, and lifecycle/tool hooks
+    preserve a clean transcript boundary. For AVO, the analogous boundary is the single Anthropic
+    variation prompt plus validation-feedback retry.
+- Local reference agent: `pi-mono-agent/packages/agent/src/types.ts`
+  - Useful pattern: hooks such as `afterToolCall` can terminate or steer after a completed tool
+    batch without corrupting transcript artifacts. For AVO, provider failures stop the loop while
+    schema/validation failures stay inside the planner retry path.
+- Exa search result: `Robust and Efficient Tool Orchestration via Layered Execution Structures
+  with Reflective Correction`, `https://arxiv.org/html/2602.18968v1`
+  - Useful fact: schema-gated tool execution benefits from localized, error-driven repair with a
+    bounded budget, rather than letting invalid calls pollute the entire trajectory.
+- Exa search result: `SWE-Pruner: Self-Adaptive Context Pruning for Coding Agents`,
+  `https://arxiv.org/abs/2601.16746v2`
+  - Useful fact: coding-agent context pruning should retain task-relevant implementation details
+    instead of compressing blindly.
+
+Change:
+
+- Runtime `avo/agent.py` now budgets the invalid-decision retry prompt as well as the initial
+  variation prompt.
+- When a planner response fails local validation, the retry preserves:
+  - the static prompt head,
+  - the newest prompt tail, including pending-transform or repair context,
+  - the validation error and correction hint at the end.
+- README now documents that validation-feedback retries use the same prompt budget.
+
+Why:
+
+- The previous checkpoint bounded the first Anthropic prompt, but `_decision_kwargs_with_feedback`
+  appended validation feedback afterward. In long runs, a prompt already near the budget could grow
+  past the intended context cap exactly when the planner needed the most precise correction signal.
+- This keeps invalid tool-output recovery localized and bounded, matching the broader agent design:
+  schema validation catches bad decisions, then the next planner call receives a compact, actionable
+  correction without losing the newest executable context.
+
+Verification:
+
+- Focused retry-budget tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_decision_feedback_retry_preserves_budget_and_latest_context tests/test_agent.py::test_valid_decision_request_retries_invalid_decision_with_feedback -q`:
+    passed, 2 tests.
+- Affected agent suite:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 201 tests.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 426 tests.
+
+Decision:
+
+- Keep the retry compaction deterministic and local to the prompt builder. Do not introduce a
+  second reviewer model or learned context pruner until a concrete Anthropic trace shows the
+  deterministic section/tail strategy is insufficient.
