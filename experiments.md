@@ -11100,3 +11100,47 @@ Decision:
 - The next root issue is still planner payload discipline: after several rejected/regressed steps,
   it can regress to prose-only transform descriptions. That should be handled by improving the
   search loop and repair prompt, not by adding a larger brittle ban list.
+
+## 2026-05-10 - Checkpoint 4.94: Require explicit transform field in agent tool output
+
+Success criteria for this checkpoint:
+
+- Improve planner payload discipline without adding a CUDA-specific phrase ban.
+- Keep the parser backward-compatible with older JSON payloads and tests.
+- Verify that the real Anthropic `agent-plan` path accepts the stricter tool schema.
+
+Research consulted:
+
+- Exa search for current production tool-calling reliability patterns found consistent guidance:
+  keep schema validation as the gate, return structured validation errors to the model, cap retries,
+  and improve schema/data-contract clarity before tuning prompts. The relevant pattern for this
+  checkpoint is to make required argument fields explicit and use validation feedback rather than
+  executing malformed tool calls.
+
+Runtime fix:
+
+- Updated the variation decision tool schema so `candidate_transform` is always a required field:
+  - transform mode must provide the structured object;
+  - no-edit and legacy-patch modes must set `candidate_transform` to `null`;
+  - local parsing still defaults a missing field to `None` so older saved JSON and unit tests remain
+    compatible.
+- Updated the planner prompt to say that `candidate_transform` must always be present and should be
+  `null` outside transform mode.
+
+Verification:
+
+- Live Anthropic schema smoke:
+  - `avo agent-plan --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts
+    --attempt-limit 8 --env-file ../avo/.env.local`;
+  - succeeded and returned an explicit structured `candidate_transform` batch for a Q/K shared-memory
+    staging compile check.
+- Runtime full suite:
+  - `.venv/bin/python -m pytest -q`: passed, 372 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- This is a better root fix than another reactive guard: it tightens the tool contract so the model
+  has to make the executable edit channel explicit every turn, while keeping the same validation and
+  retry behavior for bad semantic payloads.
