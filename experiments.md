@@ -13142,3 +13142,74 @@ Decision:
 - Keep a clear boundary: concrete recurring CUDA failure classes can become hard structural
   preflights; planning feedback classes remain planner-memory unless/until there is a real check to
   enforce.
+
+## 2026-05-10 - Checkpoint 5.34: Loop after planning feedback and concrete promotion fixes
+
+Command:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=90 timeout 21600 .venv/bin/python -m avo evolve-loop --lineage
+  ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s
+  3600 --max-steps 8 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 320
+  --loop-json attempts/loop_after_planning_feedback_20260510T1510Z.json`
+
+Source check:
+
+- Exa/NVIDIA source check before logging:
+  - NVIDIA Ampere Tuning Guide:
+    `https://docs.nvidia.com/cuda/ampere-tuning-guide/`
+  - CUDA Programming Guide async copies:
+    `https://docs.nvidia.com/cuda/archive/13.1.1/cuda-programming-guide/04-special-topics/async-copies.html`
+- Relevant constraints:
+  - For compute capability 8.6, maximum concurrent warps per SM is 48, register file is 64K
+    32-bit registers per SM, maximum thread blocks per SM is 16, and shared memory capacity is
+    100 KB per SM / 99 KB per block.
+  - Ampere adds async global-to-shared copy support, but ordinary shared-memory staging still has
+    to earn its cost against coalescing, barriers, bank behavior, and occupancy.
+  - LDGSTS/cp.async supports 4/8/16-byte element copies, with best performance requiring stronger
+    alignment; this supports keeping async-copy width as advisory unless the transform is
+    structurally invalid.
+
+Result:
+
+- The loop finished at `max_steps` with `accepted=false`.
+- No background evolve, score, compile, worker, `nvcc`, or `python -m avo` process remained after
+  the run.
+- The runtime tree, docs tree, and nested lineage tree were clean afterward.
+- Step 1 compiled a V shared-memory staging transform successfully for `sm_86`.
+- Step 2 scored the same V staging transform because the pending-score invariant forced the
+  compile-only transform to be evaluated. It was correct but regressed to
+  `3.8717621480649687` geomean TFLOPS versus current best `9.507832270603132`.
+- Steps 3-5 were executable one-shot scores, all correct and cleaned up, but all regressed:
+  - Step 3: `9.158307794702491`.
+  - Step 4: `9.254239332890148`.
+  - Step 5: `8.749709748531057`.
+- Step 6 failed planning validation after two repair attempts. The recorded failure was a Q-load
+  semantic mismatch: the text claimed reduced/reused Q loads, but the structured transform did not
+  reduce Q load sites or move them out of the repeated loop.
+- Step 7 was rejected by structural preflight as `no_effect_or_skeleton`: a pragma-only unroll edit
+  does not change dataflow and must be paired with a substantive transform.
+- Step 8 scored `kThreads=128`; it was correct and cleaned up but regressed to
+  `9.224937902194656`.
+
+Interpretation:
+
+- The latest loop fixes are working structurally:
+  - compiled transforms are not left pending;
+  - scored regressions are cleaned up;
+  - planning feedback is visible to the loop;
+  - no planning-only class was promoted as if it had a concrete hard preflight;
+  - no raw CUDA diff path was used for kernel evolution.
+- The planner still overstates semantic value in some proposals. It improved enough to produce
+  executable candidates, but it still spent budget on shared-memory staging that did not beat the
+  current kernel and on one no-effect pragma-only transform.
+- The observed V-staging regression is plausible: adding a cooperative shared-memory load and
+  barriers can lose to already coalesced/cached global V fragment loads in this simple one-warp
+  WMMA seed. The source check supports treating this as an optimization tradeoff, not a structural
+  invalidity.
+
+Decision:
+
+- Do not preserve any candidate from this run.
+- Keep V shared-memory staging and `kThreads=128` as measured regressions in attempt memory.
+- Next useful improvement is planner-side: favor transforms with verifiable semantic deltas in the
+  source over generic "stage into shared memory" or pragma-only tuning claims.
