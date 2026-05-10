@@ -12463,3 +12463,17 @@ Decision:
 - Treat plain synchronous K/KV staging as exhausted negative evidence for this seed.
 - Future async-copy work should focus on correct stage lifecycle and initialized-data guarantees,
   not copy width alone.
+
+Follow-up confirmation:
+
+- NVIDIA synchronization guidance supports explicit warp synchronization for warp-synchronous
+  shared/global-memory exchange on modern independent-thread-scheduling GPUs.
+- Confirmation score:
+  - `.venv/bin/python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 4096,8192,16384,32768 --total-tokens 32768 --num-heads 16 --head-dim 128 --dtype bf16 --causal both --repeats 3 --warmup 2 --timeout-s 600`
+  - Result: all 8 target cases correct.
+  - Geomean: `9.576586797806204` TFLOPS.
+
+Decision:
+
+- The syncwarp candidate is no longer only a one-sample gate win; keep it as confirmed current
+  runtime state.
