@@ -13397,3 +13397,64 @@ Decision:
 - Prefer this structural semantic check over adding another historical "do not repeat Q-hoist
   sync" instruction. The planner can still make Q-load hoist attempts, but the transform must now
   prove the claimed loop/dataflow movement in the source snippets.
+
+## 2026-05-10 - Checkpoint 5.39: Partial post-load-claim loop and exact-repeat memory
+
+Command:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=120 timeout 21600 .venv/bin/python -m avo evolve-loop --lineage
+  ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s
+  3600 --max-steps 10 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 380
+  --loop-json attempts/loop_after_load_claim_validation_20260510T1605Z.json`
+
+Loop result:
+
+- The loop process was interrupted before it wrote the requested final loop JSON, so this is a
+  partial validation run, not a completed loop.
+- It produced six per-attempt records from `2026-05-10T16-08-44-00-00.json` through
+  `2026-05-10T16-22-34-00-00.json`.
+- Post-interruption checks showed no remaining evolve, score, compile, worker, `nvcc`, or `ninja`
+  process. The runtime repo and lineage repo were clean. The A6000 was healthy and idle:
+  `NVIDIA RTX A6000, 8.6, 0 %, 3 MiB`.
+
+Partial attempts:
+
+- `kThreads=80`: correct, regressed to `9.23723076059812` geomean TFLOPS.
+- `kThreads=64`: correct, regressed to `9.160553963665484`.
+- Move `output_acc` rescaling into the active-warp guard: correct, regressed badly to
+  `1.5832549312452529`.
+- `kThreads=64` again: correct, regressed to `9.018591018326017`.
+- `kThreads=128`: correct, regressed to `9.15970458759749`.
+- `kThreads=80` again: correct, regressed to `9.103867860816868`.
+
+Finding:
+
+- The source-verifiable load-claim fix prevented the previously observed fake Q-hoist pattern in
+  this partial run.
+- The remaining weakness was search-loop memory: the planner repeated exact already-scored
+  regressed transforms, especially `kThreads=80` and `kThreads=64`, instead of treating those
+  scored regressions as exhausted candidates.
+
+Change:
+
+- Runtime `avo/evolve.py` now rejects a decision whose `candidate_transform` exactly matches a
+  previously scored, unaccepted transform.
+- The check intentionally allows retry when the previous score failed as `score_environment_error`;
+  transient CUDA/build substrate failures should not permanently poison a candidate.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q -k "repeated_compile_only_transform or repeated_scored_unaccepted_transform or repeated_transform_after_score_environment_error"`:
+    passed, 3 tests.
+- Affected suite and hygiene:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 93 tests.
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 413 tests.
+
+Decision:
+
+- This is not a CUDA phrase ban or a hard family ban. It is attempt-memory hygiene: exact scored
+  regressions should not be proposed again unless the prior score was an environment failure.
