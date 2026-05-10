@@ -11548,3 +11548,64 @@ Decision:
 
 - The current change is a planner-information fix. It does not change CUDA preflight policy or add a
   new attempt-specific phrase ban.
+
+## 2026-05-10 - Checkpoint 5.02: Follow-up loop after score/profile context fix
+
+Success criteria for this checkpoint:
+
+- Continue from the accepted Q-fragment-reuse MMA baseline.
+- Score the pending V double-buffer async candidate if the attempt-history follow-up keeps it alive.
+- Observe whether the planner still confuses score and profiler evidence after the context fix.
+- Record accepted, rejected, and pending evidence without adding a new guard.
+
+Run:
+
+```bash
+timeout 14400 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 3600 \
+  --max-steps 6 \
+  --compile-repair-attempts 3 \
+  --attempts-dir ./attempts \
+  --attempt-limit 40 \
+  --loop-json attempts/loop_score_pending_v_async_20260510T0421Z.json
+```
+
+Result:
+
+- Exit code `2`.
+- `completed_steps=6`, `stopped_reason=max_steps`.
+- No accepted candidate.
+- No `avo score` request for profiler-only evidence occurred after the context fix.
+
+Step summary:
+
+- Step 1 scored the pending V double-buffer `cp.async` transform:
+  - `all_correct=false`;
+  - geomean `0`;
+  - rejected for correctness failure with CUDA unknown errors.
+- Step 2 produced an invalid key-tile-32 transform. The decision itself admitted the transform did
+  not update the PV side and would likely fail; the step did not execute a command.
+- Step 3 compiled an isolated K shared-memory staging transform.
+- Step 4 scored that K staging transform:
+  - `all_correct=true`;
+  - geomean `4.377717248710737` TFLOPS;
+  - rejected versus best geomean `8.960753680686471`.
+- Step 5 compiled a vectorized 16-byte K `cp.async` staging repair:
+  - ptxas reported 64 registers, 1 barrier, 14016 bytes shared memory, and no spills;
+  - cleanup succeeded because the step was compile-only and not accepted.
+- Step 6 failed planning validation:
+  - the correctness-repair decision repeated the failed edit payload unchanged;
+  - cleanup succeeded.
+
+Decision:
+
+- The loop is now doing the right broad kind of work: compile, score, reject, and clean up concrete
+  semantic transforms rather than letting failures leak into the candidate source.
+- The evidence is negative for isolated K/V shared staging. Correct single-stage K or V staging is
+  much slower than the Q-fragment-reuse best.
+- The next useful CUDA direction should either score a genuinely repaired K async path with correct
+  per-tile offsets and stage lifetime, or move to a wider FA2-like scheduling/dataflow transform.
