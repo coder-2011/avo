@@ -14298,3 +14298,60 @@ Decision:
 - Keep automatic dynamic import tracing listed as missing for now. The runtime now has a clean
   explicit reporting hook for dynamically assembled CUDA sources, but it does not attempt to trace
   every import or extension load implicitly.
+
+## 2026-05-10 - Checkpoint 5.55: Report FA2 comparison gaps in lineage summaries
+
+Sources checked:
+
+- FlashAttention repository,
+  `https://github.com/Dao-AILab/flash-attention/`
+  - Useful facts: the repository is the official implementation of FlashAttention and
+    FlashAttention-2, supports Ampere GPUs, and its benchmark context includes head dimensions
+    64/128 with long sequence lengths such as 4k/8k/16k. That makes it a useful comparison lane
+    for the Ampere target, but not a reasonable hard acceptance gate for early candidate search.
+
+Change:
+
+- Runtime lineage summaries now include a derived `baseline_comparisons` section whenever a
+  candidate lane and FlashAttention-2 baseline lane share the same benchmark signature.
+- Each comparison records candidate geomean TFLOPS, FA2 geomean TFLOPS, candidate-vs-baseline
+  ratio, baseline-vs-candidate ratio, and the signed TFLOPS gap.
+- Runtime README, Ampere knowledge, retrieval claims, and tests document and verify the new
+  comparison signal.
+
+Why:
+
+- The optimizer already preserved candidate-vs-candidate incremental progress, but the summary did
+  not expose the remaining FA2 gap as a direct planner signal.
+- This keeps FA2 as a comparison target rather than a pass/fail threshold. The goal is to improve
+  the feedback loop with a useful optimization target, not add another brittle guard.
+
+Verification:
+
+- Focused lineage suite:
+  - `uv run pytest tests/test_lineage.py -q`: passed, 20 tests.
+- Affected lineage/knowledge suites:
+  - `uv run pytest tests/test_lineage.py tests/test_knowledge.py -q`: passed, 65 tests.
+- Retrieval query:
+  - `uv run python -m avo knowledge-search knowledge/ampere.md --query "lineage baseline_comparisons candidate_vs_baseline FA2 gap_tflops" --max-chunks 4 --max-chars 6000`:
+    returned the new baseline comparison claim and Ampere note.
+- Live lineage summary check:
+  - Current best candidate lane is about `0.0873504789x` the matching FA2 baseline, with a
+    remaining gap of about `-100.2328556` TFLOPS.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 433 tests.
+
+Blocked:
+
+- Live provider-driven optimization is still blocked by Anthropic low credit even when loading
+  `../avo/.env.local`, so this checkpoint improves the runtime feedback surface but does not prove
+  a new autonomous CUDA improvement run.
+
+Decision:
+
+- Keep candidate acceptance based on prior candidate scores for the same benchmark signature.
+  Report FA2 gap explicitly so the planner has a concrete optimization target without rejecting
+  useful intermediate candidates.
