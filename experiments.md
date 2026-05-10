@@ -12370,3 +12370,47 @@ Decision:
 - Keep the accepted `kThreads=96` retune as the new runtime candidate.
 - The next loop-mechanics fix should focus on historical failure context and self-invalid risk text:
   the planner can still mention prior invalid attempts in a way that trips current-attempt validation.
+
+## 2026-05-10 - Checkpoint 5.19: Soften async-copy granularity and fix framed failure notes
+
+Success criteria for this checkpoint:
+
+- Do not turn async-copy copy width into a standalone hard rejection. Keep it as performance
+  guidance unless the candidate violates a structural invariant.
+- Allow the planner to cite framed historical failures such as "the repair request shows the
+  previous attempt failed" without treating that as an admission that the current candidate is bad.
+- Still reject a current/proposed candidate that says it will be rejected by structural preflight.
+
+Research/context:
+
+- NVIDIA's CUDA Programming Guide says LDGSTS async copies support 4, 8, or 16 byte transfers, with
+  16-byte copies enabling L1-bypass behavior and better performance conditions.
+- NVIDIA's Ampere Tuning Guide frames async copy as a global-to-shared feature for overlapping
+  compute with data movement and avoiding extra registers. That supports treating copy width as a
+  performance contract inside a coherent pipeline, not as a reason to block every scalar repair.
+
+Change:
+
+- Runtime `avo/agent.py` now recognizes framed historical failure context even when the sentence
+  starts with evidence framing such as "the immediate compile repair request shows...".
+- Runtime `avo/agent.py` now rejects current/proposed transforms that explicitly say they will be
+  rejected by structural preflight or validation.
+- Runtime prompt guidance now says async-copy vector width is preferred, but copy-width preference
+  alone is not a hard rejection when a transform is coherent and repairable.
+
+Verification:
+
+- Focused planning/async tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_allows_historical_failure_note tests/test_agent.py::test_parse_variation_decision_allows_framed_historical_failure_note tests/test_agent.py::test_parse_variation_decision_rejects_current_transform_preflight_failure tests/test_agent.py::test_structural_preflight_allows_scalar_bf16_async_copy_for_repair tests/test_agent.py::test_structural_preflight_allows_non_scalar_async_copy_size_expression tests/test_agent.py::test_parse_variation_decision_rejects_invalid_async_pipeline_lifecycle -q`: passed, 6 tests.
+- Agent tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 193 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/agent.py tests/test_agent.py`: passed.
+  - `git diff --check`: passed.
+
+Decision:
+
+- This keeps hard preflight on structural CUDA mistakes: invalid pipeline API shape, invalid stage
+  lifecycle, unsupported WMMA contracts, disconnected helpers, and stale symbols.
+- It avoids blocking repairable async-copy experiments solely because they used scalar BF16 copy
+  size while the agent is still developing a coherent pipeline.
