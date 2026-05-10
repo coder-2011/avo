@@ -14718,3 +14718,46 @@ Decision:
 - Keep the supervisor reset deterministic and broad for now. Do not add an LLM supervisor call or
   a large rule tree; the current step should improve search-loop guidance without becoming another
   reactive ban list.
+
+## 2026-05-10 - Checkpoint 5.63: Retry invalid repair decisions with feedback
+
+External source checked:
+
+- AgentPatterns.ai, `Failure-Driven Iteration for Improving Agent Workflows`,
+  `http://agentpatterns.ai/workflows/failure-driven-iteration/`
+  - Useful fact: practical agent repair loops should pass concrete failure output back into the
+    next attempt and verify the resulting fix with the same tool, rather than letting the agent
+    guess from generic guidance.
+
+Change:
+
+- Runtime compile/materialization/correctness repair now validates the returned repair decision
+  before execution.
+- If that repair decision violates the repair contract, for example a no-edit repair for a failed
+  executable edit or a replay of an earlier failed payload, the invalid repair is not executed.
+- The same repair prompt is retried once with `Repair validation feedback` that includes the
+  validation error. If the decision is still invalid, the step remains a bounded planning failure.
+- README and knowledge retrieval notes now document the behavior.
+
+Why:
+
+- The previous repair path could ask for a repair, receive an invalid repair-specific response, and
+  immediately finalize the step. That meant the agent was not really repairing its own interface
+  mistake inside the repair episode.
+- This keeps the interface scoped and recoverable without adding another hard phrase list or an
+  unbounded retry loop.
+
+Verification:
+
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_knowledge.py -q`: passed, 95 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 447 tests.
+
+Decision:
+
+- Keep the retry count fixed at one feedback retry for now. Increasing repair attempts should be a
+  separate decision driven by live-loop evidence, not a default escape hatch.
