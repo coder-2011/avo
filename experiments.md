@@ -12802,3 +12802,63 @@ Decision:
   the next useful action is to score that same transform or reject it structurally.
 - Do not add another family ban from this loop. The useful fix is making the search loop resolve
   each compiled semantic move before exploring another one.
+
+## 2026-05-10 - Checkpoint 5.27: Bound Anthropic planner request latency
+
+Success criteria for this checkpoint:
+
+- Validate the forced pending-score fix with a short live loop, or identify the next reliability
+  blocker if the loop does not reach a compile/score transition.
+- Ensure a slow planner API call cannot hold the evolve loop indefinitely.
+- Clean up any generated candidate residue from interrupted validation.
+
+Validation attempt:
+
+- Command:
+  - `timeout 14400 .venv/bin/python -m avo evolve-loop --lineage ./lineage --knowledge
+    knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s 3600
+    --max-steps 4 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 180
+    --loop-json attempts/loop_after_forced_pending_score_20260510T1319Z.json`
+- Result:
+  - No step record was emitted.
+  - The process idled in the planner path long enough to stop the run manually.
+  - The interrupted run left a malformed generated K-staging patch in
+    `candidates/cuda_mma_attention/attention_kernel.cu`; it was reverted manually with
+    `apply_patch`, and the runtime worktree returned to only intentional code edits.
+
+Change:
+
+- Runtime `avo/agent.py` now adds a per-request Anthropic timeout to planner requests.
+- Default timeout is `180` seconds.
+- `AVO_AGENT_REQUEST_TIMEOUT_S` can override the default when shorter or longer planner waits are
+  needed.
+- Invalid, zero, or negative override values fall back to the default.
+
+Verification:
+
+- Local SDK check:
+  - installed `anthropic` is `0.100.0`;
+  - `Anthropic(..., timeout=...)` and `messages.create(..., timeout=...)` are supported by the
+    installed signatures.
+- Planner-only smoke:
+  - `AVO_AGENT_REQUEST_TIMEOUT_S=45 timeout 180 .venv/bin/python -m avo agent-plan --lineage
+    ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --attempts-dir
+    ./attempts --attempt-limit 180`
+  - returned a structured transform proposal without dirtying the tree.
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_agent_request_timeout_has_env_override tests/test_agent.py::test_decision_request_retries_transient_api_error -q`: passed, 2 tests.
+- Agent suite:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 196 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/agent.py tests/test_agent.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 401 tests.
+
+Decision:
+
+- Keep this as a request-boundary reliability fix. Do not add signal/kill cleanup in this
+  checkpoint; that is broader because SIGTERM can interrupt any point between patch application and
+  cleanup.
+- A future validation loop can use `AVO_AGENT_REQUEST_TIMEOUT_S=45` or another bounded value when
+  testing orchestration behavior.
