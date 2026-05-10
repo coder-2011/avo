@@ -12970,3 +12970,56 @@ Decision:
 - Treat the deterministic drain as completion of an already-started candidate evaluation, not as a
   new planner budget step. This keeps `max_steps` from splitting compile and score across separate
   operator runs.
+
+## 2026-05-10 - Checkpoint 5.30: Require confirmation before one-shot acceptance
+
+Live validation loop:
+
+- Command:
+  - `AVO_AGENT_REQUEST_TIMEOUT_S=90 timeout 21600 .venv/bin/python -m avo evolve-loop --lineage
+    ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s
+    3600 --max-steps 10 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 260
+    --loop-json attempts/loop_after_pending_drain_20260510T1427Z.json`
+- Result:
+  - The loop finished in 1 recorded step with `accepted=true`.
+  - It demonstrated self-repair: two stale-anchor structured transform materialization attempts
+    failed, then the repair decision found a materializable transform.
+  - The accepted one-shot score added one `__syncthreads()` after Q-fragment loads and reported
+    `9.593373728960215` geomean TFLOPS versus the prior `9.507832270603132`.
+
+Follow-up confirmation:
+
+- Confirmation score for the accepted source:
+  - `attempts/score_confirm_sync_barrier_20260510T1431Z.json`
+  - warmup 3, repeats 3, all 8 cases correct, geomean `9.564407043194905`.
+- A/B confirmation for the previous source without that barrier:
+  - `attempts/score_confirm_without_q_barrier_20260510T1432Z.json`
+  - warmup 3, repeats 3, all 8 cases correct, geomean `9.571011809582503`.
+- Interpretation:
+  - The accepted one-shot improvement was not robust. The previous source was slightly faster by
+    `0.006604766387598104` geomean TFLOPS, about `0.069%`.
+
+Change:
+
+- Reverted the noisy accepted source change in the root runtime worktree.
+- Reverted the nested lineage commit `9e24039` with lineage commit `2b5c95e`, restoring latest
+  lineage geomean to `9.507832270603132`.
+- Runtime `avo/lineage.py` now rejects any one-shot candidate score against an existing candidate
+  best for the same benchmark signature. One-shot scores can still establish an initial candidate
+  lane, but follow-on improvements must be confirmed with at least warmup 2/repeats 3 before
+  acceptance.
+
+Verification:
+
+- Focused lineage tests:
+  - `.venv/bin/python -m pytest tests/test_lineage.py -q`: passed, 20 tests.
+- Lint:
+  - `.venv/bin/python -m ruff check avo/lineage.py tests/test_lineage.py`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 404 tests.
+
+Decision:
+
+- Keep one-shot scores as cheap screening signals only once a candidate best exists.
+- Make the planner/loop earn accepted lineage updates with confirmed timing. This is a search-loop
+  reliability fix, not a CUDA-specific ban.
