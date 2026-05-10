@@ -11883,3 +11883,40 @@ Decision:
 - The mechanism is still intentionally soft. It should steer search away from repeated standalone
   shared-memory staging without forbidding future shared-memory work that is part of a different
   dataflow or pipeline design.
+
+## 2026-05-10 - Checkpoint 5.09: Relax async-copy granularity guidance
+
+Success criteria for this checkpoint:
+
+- Stop treating 16-byte async-copy granularity as a standalone hard rule.
+- Keep real hard invariants in place: stage lifecycle, initialized shared state, address ownership,
+  and disconnected helper/skeleton edits.
+- Preserve the performance guidance that 16-byte groups are usually the useful sm86 throughput
+  target for BF16 `cp.async`.
+
+Runtime/knowledge clarification:
+
+- Runtime structural preflight already allows scalar BF16 and non-scalar
+  `__pipeline_memcpy_async` size expressions through compile/repair.
+- I softened the remaining hard wording in `knowledge/ampere.md` and
+  `knowledge/retrieval_claims.md`:
+  - 16-byte groups are preferred performance guidance, not a hard rejection by themselves;
+  - narrower copies are acceptable for coherent API probes or disjoint tail handling;
+  - structural rejection should stay focused on lifecycle, initialized-data, address-ownership, and
+    no-effect/skeleton failures.
+
+Verification:
+
+- Remaining hard-phrasing scan now shows only advisory wording such as `copy granularity alone is
+  not a hard rejection`.
+- Targeted tests:
+  - `.venv/bin/python -m pytest tests/test_knowledge.py tests/test_agent.py::test_structural_preflight_allows_scalar_bf16_async_copy_for_repair tests/test_agent.py::test_structural_preflight_allows_non_scalar_async_copy_size_expression tests/test_agent.py::test_decision_feedback_explains_scalar_bf16_async_copy_error -q`: passed, 44 tests.
+- Patch hygiene:
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 378 tests.
+
+Decision:
+
+- Keep async-copy granularity as guidance the agent can reason about, not a gate that blocks a
+  coherent transform before the compiler/repair loop can see it.
