@@ -12729,3 +12729,76 @@ Decision:
   `v_frag` lifetime does not improve the current MMA seed.
 - The planner-context fix is doing its job: the next action was based on the corrected lineage best
   and the pending-transform follow-up, not the reverted noisy score.
+
+## 2026-05-10 - Checkpoint 5.26: Force score after successful compile-only transforms
+
+Success criteria for this checkpoint:
+
+- Run a fresh loop with stale-history correction active.
+- Identify whether compile-only transforms are reliably followed by score validation.
+- Fix the simplest orchestration gap without adding a CUDA-specific ban.
+
+Research refresh:
+
+- Exa search for Ampere `cp.async`/FlashAttention guidance surfaced NVIDIA CUTLASS
+  `flash_attention_v2.py`, the NVIDIA Ampere tuning guide, and CUDA async-copy documentation.
+  The useful takeaway remains structural: useful Ampere async-copy work is a coherent
+  producer/consumer pipeline with aligned tiled copies, tensor-core consumption, and register/shared
+  staging, not a scalar copy-size tweak.
+
+Loop:
+
+- Command:
+  - `timeout 43200 .venv/bin/python -m avo evolve-loop --lineage ./lineage --knowledge
+    knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s 10800
+    --max-steps 16 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 160
+    --loop-json attempts/loop_after_stale_history_fix_20260510T1232Z.json`
+- Result:
+  - `accepted=false`
+  - `completed_steps=16`
+  - `stopped_reason=max_steps`
+
+Evidence:
+
+- All scored candidates were correct but slower than the current `9.507832270603132` best:
+  - removed score-store `__syncwarp()`: `9.409806486510405`;
+  - `kThreads=128`: `9.06660586019657`;
+  - another removed-score-store-`__syncwarp()` attempt: `9.360119168246715`;
+  - cooperative Q-fragment load/register change: `8.046233836802045`;
+  - `kThreads=80`: `9.079055906599761`.
+- The loop also produced seven successful compile-only transforms that were not immediately scored:
+  cooperative K shared staging, multi-query-tile work mapping, repaired Q async double buffering,
+  another K shared-staging variant, another K shared-tile variant, K double buffering, and
+  K-register pipelining.
+- This exposed a remaining orchestration bug: the previous normalizer only rewrote an exact
+  repeated compile into a score. The planner could avoid the pending score obligation by proposing
+  a different compile-only transform or a different score transform.
+- One Q async double-buffer compile required repair and succeeded, so compile self-repair is still
+  working. The issue is not repair; it is unresolved compile-only state accumulating.
+
+Change:
+
+- Runtime pending-transform normalization now rewrites any following compile decision into a score
+  of the pending transform when the seed family can be inferred.
+- Runtime attempt-history validation now rejects moving to another compile, another score transform,
+  or another command while a semantic compile-only transform is pending. The only valid follow-up is
+  a score carrying the same `candidate_transform`.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_cli.py::test_pending_transform_payload_normalizer_rewrites_repeated_mma_compile_to_score tests/test_cli.py::test_pending_transform_payload_normalizer_forces_score_before_new_mma_compile tests/test_evolve.py::test_attempt_history_rejects_new_compile_while_transform_score_pending tests/test_evolve.py::test_attempt_history_rejects_different_score_while_transform_score_pending tests/test_evolve.py::test_attempt_history_rejects_score_without_pending_transform -q`: passed, 5 tests.
+- Affected suites:
+  - `.venv/bin/python -m pytest tests/test_cli.py tests/test_evolve.py -q`: passed, 122 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/cli.py avo/evolve.py tests/test_cli.py tests/test_evolve.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 400 tests.
+
+Decision:
+
+- Keep this as an orchestration invariant, not a prompt note: once a semantic transform compiles,
+  the next useful action is to score that same transform or reject it structurally.
+- Do not add another family ban from this loop. The useful fix is making the search loop resolve
+  each compiled semantic move before exploring another one.
