@@ -14861,3 +14861,41 @@ Decision:
 
 - Keep transcript compaction deterministic for now. LLM-generated summaries can be added later if
   live long-running sessions show the breadcrumb summary is insufficient.
+
+## 2026-05-10 - Checkpoint 5.66: Bound transcript summaries to remaining budget
+
+Change:
+
+- Follow-up to Checkpoint 5.65: runtime `compact_messages` now applies `max_chars` to the
+  structured summary when the recent tail fits inside the requested budget.
+- If the recent tail alone exceeds `max_chars`, recency wins and the summary is reduced to the
+  smallest possible marker, so the newest messages still remain verbatim.
+- README, Ampere knowledge, and retrieval claims now state this budget boundary explicitly.
+
+Why:
+
+- The structured breadcrumb summary improved traceability, but the helper still needed to treat
+  `max_chars` as a real budget instead of letting the older-message summary grow independently.
+- This keeps long evolve-loop transcripts scoped and recoverable without dropping the freshest
+  planner, compiler, or repair context.
+
+Provider status:
+
+- No new provider/API call was made for this checkpoint. The last probe in Checkpoint 5.65 reached
+  Anthropic but stopped with `planner_provider_error` because the account credit balance was too
+  low.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_transcript.py tests/test_knowledge.py -q`: passed, 57 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 453 tests.
+
+Decision:
+
+- Keep the recent tail as the priority. Older context is recoverable from durable state and
+  breadcrumbs, while losing the newest interaction would directly weaken repair behavior.
