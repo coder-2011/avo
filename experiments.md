@@ -14414,3 +14414,65 @@ Decision:
 - Keep failed repair edits as repair-loop memory, not persistent global bans. Future repairs may
   revisit a family with a materially different semantic transform, but exact failed payload replays
   inside the same repair episode are rejected before execution.
+
+## 2026-05-10 - Checkpoint 5.57: Capture runtime-loaded candidate Python sources
+
+Sources checked:
+
+- Python importlib documentation,
+  `https://docs.python.org/3/library/importlib.html`
+  - Useful fact: loadable modules have import-system state such as `__spec__`, and module
+    file locations are normally exposed through `__file__`/origin information.
+- Python sys documentation,
+  `https://docs.python.org/3/library/sys.html`
+  - Useful fact: `sys.modules` maps module names to already-loaded module objects, and code that
+    iterates it should work on a copy because imports can change the dictionary during iteration.
+- Python import-system reference,
+  `https://docs.python.org/3/reference/import.html`
+  - Useful fact: `sys.modules` is the first import cache and loaded modules may expose `__file__`
+    for file-backed Python modules.
+
+Change:
+
+- Runtime candidate scoring now scans loaded modules after candidate load/scoring and records
+  Python/source files whose `__file__` resolves under the same `candidates/` tree as the scored
+  candidate.
+- The scan is intentionally narrow:
+  - it only records source-like suffixes (`.py`, `.cpp`, `.cu`, `.cuh`, `.h`, `.hpp`);
+  - it skips `__pycache__`;
+  - it normalizes captured paths as `candidates/...`;
+  - dynamically assembled extension source lists still need static `sources=[...]` discovery or
+    the explicit `AVO_SOURCE_FILES` / `__avo_source_files__` hook.
+- Runtime README, Ampere knowledge, retrieval claims, and retrieval tests now describe this as
+  runtime-loaded Python module capture rather than broad dynamic tracing.
+
+Why:
+
+- Accepted lineage snapshots already capture direct static imports, static Torch extension source
+  lists, and candidate-declared runtime manifests. They did not capture helper modules imported via
+  runtime string imports such as `importlib.import_module("candidates.foo")`.
+- This closes the dynamic Python import part of the accepted-artifact audit gap without building a
+  broad import tracer or copying arbitrary binary modules.
+
+Verification:
+
+- Focused runtime import and retrieval tests:
+  - `uv run pytest tests/test_candidate_backend.py::test_candidate_backend_reports_runtime_imported_candidate_sources tests/test_candidate_backend.py::test_candidate_backend_reports_declared_runtime_source_files tests/test_knowledge.py::test_real_ampere_corpus_retrieves_useful_claims -q`:
+    passed, 38 tests.
+- Retrieval query:
+  - `uv run python -m avo knowledge-search knowledge/ampere.md --query "candidate runtime source manifest dynamic import AVO_SOURCE_FILES __avo_source_files__ lineage snapshot" --max-chunks 4 --max-chars 6000`:
+    returned the updated source-snapshot claim.
+- Affected suites:
+  - `uv run pytest tests/test_candidate_backend.py tests/test_evolve.py tests/test_knowledge.py -q`:
+    passed, 154 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 436 tests.
+
+Decision:
+
+- Treat runtime-loaded Python helper modules as auditable source dependencies when they live under
+  the scored candidate's `candidates/` tree. Keep dynamic extension-source tracing listed as
+  missing unless candidates report those files or express them in a static `sources=[...]` form.
