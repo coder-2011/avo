@@ -11293,3 +11293,53 @@ Decision:
 - Do not promote these correctness failures to a hard preflight yet; the repeated class is broad
   (`correctness_failed` / runtime misaligned address) and needs a better semantic transform family,
   not another phrase-specific rejection.
+
+## 2026-05-10 - Checkpoint 4.97: Add immediate correctness repair
+
+Success criteria for this checkpoint:
+
+- Extend the existing edit-repair loop without changing the candidate edit interface.
+- Repair only score correctness failures, not throughput regressions.
+- Revert the failed patch before asking for the repair, matching compile/materialization repair.
+- Keep the repair prompt structural: ask for a revised executable edit that addresses the violated
+  invariant, not a phrase-specific guard.
+- Verify with focused tests plus the full runtime test suite.
+
+Runtime fix:
+
+- Added `attempt_has_repairable_correctness_failure`:
+  - requires an applied candidate edit;
+  - requires a successful command result with a score payload;
+  - requires `all_correct=false`;
+  - ignores throughput-only gate rejections.
+- Added correctness failure summary helpers so the repair prompt includes the classified failure and
+  score error text.
+- Extended the evolve repair router:
+  - materialization failures still ask for anchor/match repair;
+  - compile failures still ask for compiler-output repair;
+  - correctness failures now ask for an immediate semantic repair after cleanup.
+- The correctness repair prompt points the agent at initialized dataflow, alignment, bounds,
+  masking, synchronization, and accumulation semantics. It does not add a new CUDA phrase ban.
+- README now documents that failed materialization, compile, or score-correctness edits can trigger
+  immediate revised-edit repair.
+
+Verification:
+
+- Focused repair tests:
+  - compile repair still works;
+  - transform materialization repair still works;
+  - new correctness repair test simulates a score payload with `all_correct=false`, verifies that
+    the failed patch is reverted, verifies the repair prompt includes the score error, and verifies
+    the repaired score becomes the final accepted attempt.
+- Runtime full suite:
+  - `.venv/bin/python -m pytest -q`: passed, 373 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- This closes the most obvious remaining self-repair gap from the relaxed async-copy loop. Compile
+  repair was already functioning; now a candidate that compiles but fails correctness can also get
+  one or more immediate revised executable edits before the top-level loop moves on.
+- Throughput regressions remain normal gate rejections. Repairing those immediately would blur
+  search with local debugging and is not the same class as a correctness violation.
