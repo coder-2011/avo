@@ -13063,3 +13063,44 @@ Decision:
   whose text and structured transform disagree, or whose own risk text says the patch is invalid.
 - Next useful search-loop work is to make those failures produce better follow-up context for the
   planner rather than adding more hard CUDA-specific bans.
+
+## 2026-05-10 - Checkpoint 5.32: Surface planning validation feedback
+
+Problem:
+
+- The post-confirmation-gate loop showed two planning-validation failures:
+  - A structured transform claimed K-load traffic reduction but did not make a matching dataflow
+    change.
+  - A patch was described by its own risk text as likely out-of-bounds/incorrect.
+- These were classified, but the planner-facing attempt summary mostly exposed the class and not
+  the short reason. That makes the loop less self-correcting than it should be.
+
+Change:
+
+- Runtime `avo/evolve.py` now includes a capped `planning_feedback=...` field in recent-attempt
+  summaries for planning-validation failures.
+- Predicted correctness failures from planning-risk validation now get their own class,
+  `planning_predicted_correctness_failure`, instead of being folded into generic
+  `planning_validation`.
+- This is intentionally not another CUDA hard ban. It gives the next planner turn concise feedback
+  about why the proposed edit was invalid so it can repair the semantic move.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_classifies_transform_semantic_mismatch tests/test_evolve.py::test_summarize_attempt_history_classifies_predicted_correctness_planning_failure -q`:
+    passed, 2 tests.
+- Affected suite:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 87 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/python -m ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 405 tests.
+
+Decision:
+
+- Keep planner validation hard for decisions that contradict themselves or describe a known
+  correctness break.
+- Make the recovery path softer and more useful: feed the concise failure reason into the next
+  planning context rather than expanding a reactive CUDA-specific ban list.
