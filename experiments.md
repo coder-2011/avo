@@ -12173,3 +12173,74 @@ Decision:
 - This is a small reliability fix, not a new preflight class. It reduces the reactive guard behavior
   by allowing the planner to use prior failure information while still rejecting decisions that call
   their own current edit invalid.
+
+## 2026-05-10 - Checkpoint 5.15: Longer loop records work-mapping negatives and narrows load-claim validation
+
+Success criteria for this checkpoint:
+
+- Run a longer evolve loop after the historical-failure-note fix.
+- Check whether the planner can carry compile-only transforms into score attempts.
+- Record useful CUDA negative evidence from the run.
+- Fix any recurring validation issue that blocks reasonable planning context.
+
+Run:
+
+```bash
+timeout 28800 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 7200 \
+  --max-steps 12 \
+  --compile-repair-attempts 4 \
+  --attempts-dir ./attempts \
+  --attempt-limit 72 \
+  --loop-json attempts/loop_after_historical_failure_fix_20260510T0628Z.json
+```
+
+Loop result:
+
+- Stopped with `accepted=false`, `completed_steps=12`, `stopped_reason=max_steps`.
+- The pending-transform feedback path did work for compile-only candidates:
+  - `kThreads=32` lane-index rewrite compiled, was then scored, and failed correctness.
+  - `kThreads=128` compiled, was then scored, passed correctness, and regressed to
+    `9.118922525821796` geomean TFLOPS versus best `9.168741394385114`.
+  - pure `kThreads=32` compiled, was then scored, passed correctness, and regressed to
+    `8.357124079366539`.
+  - `kQueryTilesPerBlock=2` compiled, was then scored, passed correctness, and regressed to
+    `9.111694101686032`.
+- The run exposed two reliability issues:
+  - after the failed 32-thread lane-index score, the planner proposed a revert transform even though
+    cleanup had already restored the source, producing a no-op transform rejection;
+  - load-reuse semantic validation treated baseline context like "the current kernel already loads Q
+    once" as if the proposed transform claimed to newly reduce Q loads.
+
+Fix:
+
+- Runtime `avo/agent.py` now skips existing-state planning windows when looking for load-reduction
+  claims or contract-only dataflow claims.
+- Added tests that allow baseline context such as "the current kernel already loads Q once", while
+  still rejecting "this transform loads Q once" when the structured transform does not change Q load
+  sites.
+- Runtime knowledge now records the thread-count and multi-query-tile negative evidence.
+
+Verification:
+
+- Focused load-claim and historical-context tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_allows_existing_q_reuse_context tests/test_agent.py::test_parse_variation_decision_rejects_current_q_reuse_claim_without_q_load_change tests/test_agent.py::test_parse_variation_decision_rejects_claimed_v_reuse_without_v_load_change tests/test_agent.py::test_parse_variation_decision_allows_probability_load_hoist_claim tests/test_agent.py::test_parse_variation_decision_allows_historical_failure_note -q`: passed, 5 tests.
+- Agent tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 191 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/agent.py tests/test_agent.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 384 tests.
+
+Decision:
+
+- Keep `kThreads=64` as the current accepted thread-count point.
+- Treat simple `kThreads=32`, `kThreads=128`, and serial `kQueryTilesPerBlock=2` as negative evidence
+  for this seed.
+- The no-op revert-after-cleanup behavior is still a follow-up reliability issue; the loop should
+  classify a failed scored family and move on rather than trying to revert an already-clean source.
