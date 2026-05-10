@@ -14015,3 +14015,37 @@ Decision:
 
 - Keep prompt compaction section-based and deterministic. Do not add another agent, summarizer, or
   learned memory layer until a concrete failure shows the simpler section budget is insufficient.
+
+## 2026-05-10 - Checkpoint 5.49: Prompt-budget loop smoke hit provider stop
+
+Command:
+
+```bash
+AVO_AGENT_REQUEST_TIMEOUT_S=120 timeout 1200 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 300 \
+  --max-steps 5 \
+  --compile-repair-attempts 2 \
+  --attempts-dir ./attempts \
+  --attempt-limit 550 \
+  --loop-json attempts/loop_prompt_budget_20260510T214804Z.json
+```
+
+Result:
+
+- The loop recorded one planning-failure step and stopped with
+  `stopped_reason=planner_provider_error`.
+- The Anthropic response was a `BadRequestError` reporting that the credit balance is too low for
+  API access.
+- No CUDA candidate transform, compile, score, or repair attempt executed because the planner call
+  did not produce a decision.
+
+Decision:
+
+- This validates the stop policy under the current account state: provider/account failures are
+  infrastructure stops, not CUDA search failures and not reasons to add new preflight guards.
+- Resume live evolution when Anthropic credits are available; the loop command shape is otherwise
+  ready for a longer run.
