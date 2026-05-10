@@ -12626,3 +12626,72 @@ Decision:
 - Keep the syncwarp-present runtime kernel and corrected local lineage.
 - Future small timing wins can still be accepted, but only after stronger score settings or a
   margin large enough to survive the one-shot noise filter.
+
+## 2026-05-10 - Checkpoint 5.24: Mark stale accepted attempt history
+
+Success criteria for this checkpoint:
+
+- Verify the one-shot acceptance gate and command recovery in a fresh evolve loop.
+- Prevent reverted or noisy accepted attempt records from polluting future planner context as if
+  they were the current lineage best.
+
+Loop:
+
+- Command:
+  - `timeout 36000 .venv/bin/python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s 9600 --max-steps 12 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 128 --loop-json attempts/loop_after_one_shot_gate_20260510T1142Z.json`
+- Result:
+  - `accepted=false`
+  - `completed_steps=12`
+  - `stopped_reason=max_steps`
+
+Evidence:
+
+- Self-repair worked on a vectorized K-staging compile failure; the repaired transform compiled
+  and was then scored instead of being lost.
+- Pending-transform command recovery worked for the repaired K-staging candidate: the loop scored
+  the compiled pending transform and rejected it after a correct but slow
+  `3.626402277701616` geomean TFLOPS run.
+- A second cooperative K-staging transform also passed correctness but regressed to
+  `3.614179233547189` geomean TFLOPS, reinforcing that isolated K shared staging remains exhausted
+  for this seed.
+- Several smaller semantic moves passed correctness but regressed:
+  - removing a barrier after score storage scored `9.449127781532056`;
+  - `kThreads=64` scored `9.100221174050498`;
+  - V-loop unroll scored `9.419139786612444`;
+  - `kThreads=80` scored `9.002945885589778`.
+- A `kTile=8` proposal was rejected before compile as no source change.
+- A key-loop unroll and a V-fragment pipeline transform compiled near the end of the loop but were
+  not scored before the step budget expired.
+- The planner still repeatedly described the noisy removed-syncwarp attempt as the current
+  `9.54` TFLOPS winner because the raw attempt-history directory contained a historical
+  `gate accepted=true` record even though local lineage had been reverted to the syncwarp-present
+  `9.507832270603132` best.
+
+Change:
+
+- Runtime attempt-history summarization now receives the actual lineage best from
+  `best_geomean(args.lineage)`.
+- Accepted score records above the current lineage best are labeled `class=stale_accepted` and
+  annotated as reverted or noisy historical acceptances, not current best state.
+- The summary also adds a lineage-correction note when recent attempt history contains such stale
+  accepted records.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_marks_reverted_acceptance_stale tests/test_evolve.py::test_summarize_attempt_history_reports_recent_steps -q`: passed, 2 tests.
+- Affected suites:
+  - `.venv/bin/python -m pytest tests/test_evolve.py tests/test_cli.py -q`: passed, 119 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/evolve.py avo/cli.py tests/test_evolve.py`: passed.
+  - `git diff --check`: passed.
+- Real attempt-history check:
+  - `attempts/2026-05-10T11-26-29-00-00.json` is now summarized as
+    `class=stale_accepted` with lineage status `stale accepted above current best
+    9.5078322706`.
+
+Decision:
+
+- Keep the implementation small and state-based rather than adding another planner phrase ban.
+- Future planner context should no longer treat reverted noisy acceptances as the live best merely
+  because old attempt JSON still contains `gate accepted=true`.
