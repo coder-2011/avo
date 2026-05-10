@@ -13023,3 +13023,43 @@ Decision:
 - Keep one-shot scores as cheap screening signals only once a candidate best exists.
 - Make the planner/loop earn accepted lineage updates with confirmed timing. This is a search-loop
   reliability fix, not a CUDA-specific ban.
+
+## 2026-05-10 - Checkpoint 5.31: Post-confirmation-gate loop run
+
+Command:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=90 timeout 14400 .venv/bin/python -m avo evolve-loop --lineage
+  ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s
+  3600 --max-steps 6 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 280
+  --loop-json attempts/loop_after_confirmed_gate_20260510T1438Z.json`
+
+Result:
+
+- The loop finished at `max_steps` with `accepted=false`.
+- No background evolve, score, compile, worker, `nvcc`, or `python -m avo` process remained after
+  the run.
+- Step 1 failed planning validation before execution: the planner claimed cooperative K tile
+  staging/reduced K-load traffic, but the structured transform did not actually reduce K load sites
+  or move them out of the repeated loop.
+- Steps 2-5 produced executable score attempts on the large Ampere benchmark signature
+  (`seq_lens=4096,8192,16384,32768`, `total_tokens=32768`, `num_heads=16`, `head_dim=128`,
+  `bf16`, causal and noncausal).
+- All four scored candidates were correct and cleaned up after scoring, but each regressed versus
+  the current best `9.507832270603132` geomean TFLOPS:
+  - Step 2: `9.070815939784865`.
+  - Step 3: `9.077303848372576`.
+  - Step 4: `9.31778686584628`.
+  - Step 5: `9.331295759794157`.
+- Step 5 exercised the repair path: the first scored attempt had one repair, then the repaired
+  candidate executed correctly but still regressed.
+- Step 6 failed planning validation before execution because the decision itself described an
+  out-of-bounds/correctness failure mode for the proposed patch.
+
+Decision:
+
+- The confirmation gate is doing the right thing: no one-shot result was accepted into lineage in
+  this run.
+- Self-repair is active for executable candidates, but planning still wastes budget on proposals
+  whose text and structured transform disagree, or whose own risk text says the patch is invalid.
+- Next useful search-loop work is to make those failures produce better follow-up context for the
+  planner rather than adding more hard CUDA-specific bans.
