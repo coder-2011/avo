@@ -13255,3 +13255,40 @@ Decision:
 - Make insert transforms linewise by default because most CUDA/Python source insertions are
   statement/block insertions, and line-glued materialization is almost never the intended semantic
   move.
+
+## 2026-05-10 - Checkpoint 5.36: Source-verifiable semantic transform claims
+
+Problem:
+
+- The latest loop still spent budget on proposals whose planning text overstated the transform:
+  a Q-load reuse claim without a matching source delta, and generic staging/tuning descriptions
+  that were not always tied tightly to changed load/store/loop sites.
+- Existing validators catch some mismatch classes, but the prompt should make the rule explicit
+  before the planner emits the candidate.
+
+Change:
+
+- Runtime `avo/agent.py` now tells the planner that the claimed semantic delta must be
+  source-verifiable from `candidate_transform`.
+- The prompt and repo context now say that claims about fewer/reused loads, moved staging,
+  different work mapping, or pipeline overlap must correspond to exact transform steps that
+  remove, replace, or relocate the relevant current load/store/loop sites.
+- Semantic-mismatch feedback now repeats the same rule so repair turns have a concrete target.
+
+Verification:
+
+- Focused prompt tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_build_repo_context_lists_local_candidates tests/test_agent.py::test_build_variation_prompt_includes_repo_context tests/test_agent.py::test_decision_feedback_explains_transform_semantic_mismatch_error -q`:
+    passed, 3 tests.
+- Affected suite:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 197 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/python -m ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 408 tests.
+
+Decision:
+
+- Keep this as guidance and feedback, not another narrow hard CUDA ban. Existing validators still
+  reject objective mismatches; the prompt should reduce the chance that the planner emits them.
