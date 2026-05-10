@@ -13913,3 +13913,56 @@ Decision:
 
 - Keep CUDA/search failures repairable inside the evolve loop, but stop immediately on classified
   planner provider/API outages after recording the step. This is a stop policy, not a CUDA guard.
+
+## 2026-05-10 - Checkpoint 5.47: Accepted source snapshots include static extension sources
+
+Sources checked:
+
+- PyTorch `torch.utils.cpp_extension` documentation,
+  `https://docs.pytorch.org/docs/2.11/cpp_extension.html`
+  - Useful fact: `torch.utils.cpp_extension.load(name, sources=...)` accepts a string or list of
+    relative/absolute paths to C++/CUDA source files. Those paths are build inputs, so accepted AVO
+    lineage snapshots should capture statically declared local sources when they are under
+    `candidates/`.
+
+Change:
+
+- Runtime `avo/evolve.py` now statically parses accepted candidate Python files for
+  `sources=` arguments on extension-loading calls.
+- The parser resolves conservative `pathlib` expressions such as
+  `Path(__file__).resolve().parent / "shared_extension"` and source lists containing
+  `str(EXTENSION_DIR / "attention_kernel.cu")`.
+- Only existing source files under `candidates/` are captured. The implementation does not import
+  candidate modules, execute arbitrary code, follow symlinks, or include files outside the candidate
+  source boundary.
+- README now states that accepted source snapshots include direct local imports and statically
+  declared extension sources, while dynamic/import-executed discovery remains missing.
+
+Why:
+
+- The previous manifest checkpoint captured scored modules, companion directories, and direct local
+  imports. That still missed a realistic PyTorch extension pattern where a wrapper lists build
+  sources from a shared local directory outside the companion seed directory.
+- Capturing statically declared `sources=[...]` closes that audit gap without turning scoring into
+  an import tracer.
+
+Verification:
+
+- Focused provenance tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_finalize_attempt_snapshots_static_extension_sources_outside_companion tests/test_evolve.py::test_finalize_attempt_snapshots_local_python_import_dependencies tests/test_evolve.py::test_finalize_attempt_snapshots_scored_candidate_sources_without_patch -q`:
+    passed, 3 tests.
+- Focused lint:
+  - `.venv/bin/ruff check avo/evolve.py tests/test_evolve.py`: passed.
+- Affected suites:
+  - `.venv/bin/python -m pytest tests/test_evolve.py tests/test_lineage.py -q`:
+    passed, 120 tests.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed in both runtime and lab-notebook repos.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 424 tests.
+
+Decision:
+
+- Keep dependency discovery static and candidate-scoped. Do not execute candidate imports just to
+  discover build sources; dynamic source discovery remains a future audit feature.
