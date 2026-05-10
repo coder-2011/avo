@@ -14593,3 +14593,30 @@ Decision:
 - Keep `replace_block_once` as a content-anchored block transform, not a new raw diff channel. This
   is enough to steer the planner toward coherent source spans while preserving the current
   materialize/preflight/repair path.
+
+## 2026-05-10 - Checkpoint 5.60: Index block transform retrieval claim
+
+Change:
+
+- Added a high-value retrieval claim for `replace_block_once` in the runtime knowledge claims file.
+- Added a retrieval test query for the distinction between `replace_block_once`, tiny text edits,
+  and raw CUDA diffs.
+
+Why:
+
+- Checkpoint 5.59 updated the runtime and Ampere note, but the curated claim index did not yet
+  expose the new operation directly. The planner should be able to retrieve the concrete interface
+  rule, not only the broader "small semantic transform" principle.
+
+Verification:
+
+- `uv run pytest tests/test_knowledge.py::test_real_ampere_corpus_retrieves_useful_claims -q`:
+  passed, 37 tests.
+- `uv run pytest tests/test_knowledge.py -q`: passed, 47 tests.
+- `uv run ruff check`: passed in the runtime repo.
+- `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Keep this as a knowledge-indexing checkpoint only. No runtime behavior changed after the
+  `replace_block_once` implementation checkpoint.
