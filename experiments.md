@@ -13754,3 +13754,56 @@ Decision:
   orchestration fragility, not an invalid kernel transformation.
 - Keep async-copy granularity soft: prefer 16-byte vector groups for throughput, but only reject
   async-copy patches when the executable dataflow violates a structural invariant.
+
+## 2026-05-10 - Checkpoint 5.44: Provider outages do not become planner failure memory
+
+Sources checked:
+
+- AgentRx, `https://arxiv.org/pdf/2602.02475`
+  - Useful pattern: failed agent trajectories need a failure taxonomy with evidence for the
+    critical failure step. For AVO, provider/API failures are an orchestration/tool availability
+    class, not a CUDA transformation or planner-contract class.
+- Debug2Fix, `https://arxiv.org/abs/2602.18571v1`
+  - Useful pattern: better tool design and richer runtime feedback can improve coding-agent
+    repair behavior. The feedback should distinguish runtime/program evidence from tool or
+    infrastructure failure.
+
+Change:
+
+- Runtime `avo/evolve.py` now classifies planner-provider/API outages as
+  `planner_provider_error`.
+- `planner_provider_error` is ignored by recurring-failure-class promotion, so repeated API or
+  billing outages do not become hard CUDA preflight tracks.
+- Repeated identical provider failures also skip repeated-fingerprint supervisor advice. Other
+  ignored classes such as generic `command_failed` still keep repeated-fingerprint supervision,
+  preserving the existing loop behavior for real command repetition.
+
+Why:
+
+- The previous checkpoint made provider failures durable, but they would have appeared as generic
+  `planning_validation`. That risks teaching the loop the wrong lesson: a low-credit Anthropic
+  response is not a malformed transform, bad CUDA hypothesis, or planner schema failure.
+- Separating this class keeps attempt memory useful without letting infrastructure outages shape
+  CUDA search policy.
+
+Verification:
+
+- Focused memory/promotion tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q -k "provider_failure or
+    planning_feedback or recurring_failure_class or promoted_preflight"`:
+    passed, 7 tests.
+- Affected suites:
+  - `.venv/bin/python -m pytest tests/test_evolve.py tests/test_cli.py -q`:
+    passed, 139 tests.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 421 tests.
+
+Decision:
+
+- Keep provider outage records visible in attempt history for auditability, but do not treat them
+  as planner/search feedback.
+- Do not add CUDA guards for this class. The correct response is orchestration classification and
+  retry/budget behavior once Anthropic access is available again.
