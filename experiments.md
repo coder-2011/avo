@@ -11920,3 +11920,81 @@ Decision:
 
 - Keep async-copy granularity as guidance the agent can reason about, not a gate that blocks a
   coherent transform before the compiler/repair loop can see it.
+
+## 2026-05-10 - Checkpoint 5.10: Longer loop accepts probability-fragment reuse
+
+Success criteria for this checkpoint:
+
+- Run the evolve loop after semantic-family memory and async-copy guidance changes.
+- Verify whether the loop now chooses materially different CUDA moves instead of repeating isolated
+  shared-memory staging.
+- Confirm any accepted candidate with correctness, TFLOPS, compile-resource evidence, and tests.
+
+Run:
+
+```bash
+timeout 21600 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 5400 \
+  --max-steps 8 \
+  --compile-repair-attempts 4 \
+  --attempts-dir ./attempts \
+  --attempt-limit 48 \
+  --loop-json attempts/loop_after_semantic_family_async_softening_20260510T0540Z.json
+```
+
+Result:
+
+- Loop stopped early with `accepted=true`, `completed_steps=6`, `stopped_reason=accepted`.
+- The lineage repo committed the accepted candidate as `e96ce95 evolve: accept candidate`.
+- The first step still failed planning validation by repeating an unpatched MMA seed score.
+- A `kThreads=256` work-mapping transform compiled, then scored correct but regressed to
+  `5.788182135598767` geomean TFLOPS versus best `8.960753680686471`.
+- A later `kTile=32` proposal was rejected by shape-contract preflight because it did not implement
+  the necessary second 16-row sub-tile dataflow.
+
+Accepted transform:
+
+- Actual materialized CUDA change: hoist the PV-side `probability_frag` declaration and
+  `wmma::load_matrix_sync(probability_frag, probabilities, kTile)` out of the 8-output-chunk loop.
+- This loads the probability WMMA A fragment once per key tile instead of once per output chunk.
+- The planner's first sentence overstated the move as V-tile reuse. The patch does not reduce V
+  global loads; V is still loaded once per output chunk.
+
+Gate score:
+
+- All 8 full-target BF16 cases correct.
+- Accepted geomean: `9.157629176515384` TFLOPS versus previous best
+  `8.960753680686471`.
+- Per-case TFLOPS:
+  - seq4096: noncausal `12.93389270271075`, causal `6.61122454205263`;
+  - seq8192: noncausal `12.897203926337777`, causal `6.575085128380674`;
+  - seq16384: noncausal `12.806310533173857`, causal `6.5326744387412985`;
+  - seq32768: noncausal `12.819775713671431`, causal `6.3600546666917275`.
+
+Confirmation:
+
+- Re-scored the accepted candidate with repeats 3 and warmup 2:
+  - `all_correct=true`;
+  - geomean `9.237725222665237` TFLOPS.
+- Standalone compile:
+  - sm86 target;
+  - 64 registers;
+  - 1 barrier;
+  - 9920 bytes shared memory;
+  - 0 spill stores/loads.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 378 tests.
+
+Decision:
+
+- Preserve both accepted reuse moves: `q_frags[8]` across K tiles and `probability_frag` across PV
+  output chunks.
+- This is evidence that the semantic-family signal helped the loop escape repeated staging attempts,
+  but planner-interface reliability is still imperfect: it still produced one unpatched-score
+  validation failure and one invalid batch-size failure in the same run.
+- Future V/PV proposals must distinguish actual V reuse from probability-fragment reuse; do not
+  accept rationale text as evidence of what changed.
