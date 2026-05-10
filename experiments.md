@@ -14620,3 +14620,53 @@ Decision:
 
 - Keep this as a knowledge-indexing checkpoint only. No runtime behavior changed after the
   `replace_block_once` implementation checkpoint.
+
+## 2026-05-10 - Checkpoint 5.61: Route score-time extension builds to compile repair
+
+External source checked:
+
+- PyTorch `torch.utils.cpp_extension` documentation,
+  `https://docs.pytorch.org/docs/2.12/cpp_extension.html`
+  - Useful fact: `torch.utils.cpp_extension.load(name, sources=[...])` emits a Ninja build file,
+    compiles the given sources into a dynamic library, and loads that library into the Python
+    process. A failure during this stage is build feedback for the candidate extension sources,
+    not a numerical correctness result.
+
+Change:
+
+- Score payload errors that look like CUDA/Torch extension build failures now classify as
+  `score_time_compile_failure`.
+- `evolve-once` routes that class to an immediate score-time compile-repair prompt instead of the
+  ordinary correctness-repair prompt.
+- The repair prompt includes the failed edit payload, score error summary, and runtime-captured
+  `candidate_source_files` when the score payload reports them.
+- Runtime README and knowledge claims now document the routing rule.
+
+Why:
+
+- The loop already repaired command-level compile failures, but build failures can also surface
+  inside candidate scoring when PyTorch JIT-builds an extension. Treating those as
+  `all_correct=false` correctness failures misleads the agent with a prompt that says the code
+  compiled and ran.
+- This is a routing fix, not another CUDA phrase ban: score-time extension build output is sent to
+  a compile-style repair path so the agent can repair its own build error with the relevant source
+  files visible.
+
+Verification:
+
+- Focused regression tests:
+  - `uv run pytest tests/test_evolve.py::test_score_payload_extension_build_failure_is_compile_class tests/test_cli.py::test_evolve_once_repairs_score_time_extension_build_failure_before_finishing -q`:
+    passed, 2 tests.
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_evolve.py tests/test_knowledge.py -q`:
+    passed, 195 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 444 tests.
+
+Decision:
+
+- Keep environment failures such as missing Ninja or missing CUDA out of repair routing, but treat
+  actual candidate extension build output from `nvcc`/Ninja as repairable compile feedback.
