@@ -13525,3 +13525,71 @@ Decision:
   self-repair, then failed correctness on the realistic validation workload.
 - Treat attempt history as chronological data from payload timestamps, not filename convention;
   loop/manual artifact names should not change search memory semantics.
+
+## 2026-05-10 - Checkpoint 5.41: Batch transforms tolerate redundant no-op steps
+
+Sources checked:
+
+- NVIDIA Ampere Tuning Guide:
+  `https://docs.nvidia.com/cuda/ampere-tuning-guide/`
+  - sm86 has 48 resident warps/SM, 64K 32-bit registers/SM, up to 16 resident
+    blocks/SM, 100 KB shared memory/SM, and 99 KB shared memory per block with
+    opt-in dynamic shared memory.
+  - Ampere async global-to-shared copy can overlap memory movement with compute,
+    avoid extra registers, and may bypass L1.
+- CUDA C++ Programming Guide, async copies:
+  `https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#async-copies`
+  - Hardware async copy uses 4, 8, or 16 byte transfers from global to shared
+    memory, aligned to the transfer size; 128 byte alignment is the performance
+    target when practical.
+- FlashAttention v2.8.3 interface:
+  `https://github.com/Dao-AILab/flash-attention/blob/v2.8.3/flash_attn/flash_attn_interface.py`
+  - FA2 treats sm8x separately from sm80. For head_dim <= 128, sm8x uses
+    block_n=64 for causal/no-dropout cases and block_n=32 otherwise.
+
+Loop command:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=120 timeout 10800 .venv/bin/python -m avo evolve-loop
+  --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local
+  --timeout-s 3600 --max-steps 3 --compile-repair-attempts 4 --attempts-dir ./attempts
+  --attempt-limit 450 --loop-json attempts/loop_after_history_repair_context_20260510T1903Z.json`
+
+Loop result:
+
+- The loop completed 3 steps without accepting a candidate.
+- Step 1 failed planning validation because `candidate_transform` was not an object.
+- Step 2 was rejected because the next command repeated an already recorded unpatched MMA seed
+  score without a structural candidate change.
+- Step 3 proposed a coherent query-tile batch transform, but materialization rejected the batch
+  before compile because one step was an identity replacement of shared-memory declarations.
+
+Change:
+
+- Runtime `avo/evolve.py` now skips no-op steps inside `op=batch` transforms.
+- Standalone no-op transforms still fail immediately.
+- All-no-op batches still fail via the existing final `transform produced no source change` check.
+
+Why:
+
+- This matches the current transform contract better: a batch is the smallest coherent semantic
+  move. A redundant identity step inside that move should not invalidate the useful edits around
+  it, but a transform that changes nothing is still not executable search progress.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q -k "noop_batch or duplicate_include or materialize_candidate_transform_generates_batch_patch"`:
+    passed, 4 tests.
+- Affected suites and hygiene:
+  - `.venv/bin/python -m pytest tests/test_evolve.py tests/test_cli.py -q`:
+    passed, 135 tests.
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 417 tests.
+
+Decision:
+
+- Do not add a new CUDA guard for this failure. The candidate had a recoverable transform
+  materialization issue, not an invalid CUDA hypothesis. Let the batch reach compile/correctness
+  when it contains at least one real source change.
