@@ -12032,3 +12032,41 @@ Decision:
 
 - This is an agent-interface repair, not a new CUDA ban. It should help the planner fix malformed
   decision payloads before the evolve loop wastes a step recording a planning-validation failure.
+
+## 2026-05-10 - Checkpoint 5.12: Validate claimed operand load-reuse semantics
+
+Success criteria for this checkpoint:
+
+- Address the mismatch seen in checkpoint 5.10 where the planner claimed V-tile reuse but the
+  materialized patch only hoisted `probability_frag`.
+- Keep the check structural and semantic, not another historical phrase ban.
+- Allow the accepted probability-fragment hoist when the claim accurately describes it.
+
+Runtime fix:
+
+- Candidate-transform validation now inspects planning text for concrete operand load-reduction or
+  reuse claims, such as reducing/reusing Q/K/V/probability loads.
+- For `replace_once` transforms, the validator compares before/after operand load sites:
+  - it accepts a claim if the replacement reduces the operand load-site count;
+  - it also accepts a hoist if the operand load moves from inside a repeated loop to outside it.
+- It rejects claims where the named operand's load sites are unchanged and still inside the repeated
+  loop.
+
+Verification:
+
+- Regression tests:
+  - claimed V reuse with only `probability_frag` hoisting is rejected;
+  - the same transform is accepted when the claim says probability load hoist;
+  - existing contract-only semantic mismatch test still passes.
+- Focused command:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_rejects_claimed_v_reuse_without_v_load_change tests/test_agent.py::test_parse_variation_decision_allows_probability_load_hoist_claim tests/test_agent.py::test_parse_variation_decision_rejects_constant_proxy_for_dataflow_claim -q`: passed, 3 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/agent.py tests/test_agent.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 381 tests.
+
+Decision:
+
+- This should make the agent more honest about the actual CUDA move it materializes. It does not
+  forbid V reuse; it requires a V-reuse claim to actually move or reduce V load sites.
