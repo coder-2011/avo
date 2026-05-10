@@ -14804,3 +14804,60 @@ Decision:
 
 - Keep automatic discovery tied to candidate naming conventions and source suffix filtering. Wider
   discovery should require a concrete failure trace before expanding the surface.
+
+## 2026-05-10 - Checkpoint 5.65: Add structured transcript breadcrumbs
+
+External sources checked:
+
+- Pi mono-agent local reference, `packages/agent/README.md`
+  - Useful pattern: context transformation is a first-class pre-LLM step for pruning or compaction,
+    separate from LLM-format conversion. The loop can stop after a turn to compact before another
+    model call, rather than aborting a provider stream or running tool work mid-compaction.
+- Exa result, `packages/coding-agent/docs/compaction.md at main - badlogic/pi-mono`,
+  `https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/compaction.md`
+  - Useful fact: robust compaction keeps recent messages and summarizes the older span, with
+    repeated compactions anchored around the prior kept boundary.
+- Exa result, `Context Compaction | Everruns`,
+  `https://docs.everruns.com/advanced/compaction/`
+  - Useful fact: practical compaction keeps recent tool outputs verbatim and replaces older bulky
+    outputs with compact summaries or placeholders while preserving traceability.
+
+Provider probe:
+
+- `uv run --extra agent --extra cuda python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --env-file ../avo/.env.local --timeout-s 900 --max-steps 3 --loop-json attempts/loop_after_companion_sources_20260510T_runtime.json`
+  reached Anthropic but stopped after one planner step with `planner_provider_error`: the account
+  credit balance is too low for the Anthropic API. No CUDA candidate command ran.
+
+Change:
+
+- Runtime `compact_messages` now keeps the newest messages verbatim and replaces older messages
+  with a structured `<summary>` containing:
+  - compacted-message count,
+  - recent-message count,
+  - durable-state recovery pointers,
+  - bounded role/character/excerpt breadcrumbs for the first older messages,
+  - an omitted-count marker when the older span is large.
+- README, Ampere knowledge, and retrieval claims now describe this as deterministic local
+  compaction, not a claim that full old tool output remains active in model context.
+
+Why:
+
+- The old helper kept recent messages but replaced all older turns with one generic sentence. That
+  was too lossy for the architecture requirement around long-running agent context management.
+- The new behavior preserves enough breadcrumbs for a future harness or agent to know what kind of
+  context was compacted and where to recover exact state from disk.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_transcript.py tests/test_knowledge.py -q`: passed, 55 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 451 tests.
+
+Decision:
+
+- Keep transcript compaction deterministic for now. LLM-generated summaries can be added later if
+  live long-running sessions show the breadcrumb summary is insufficient.
