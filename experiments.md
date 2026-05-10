@@ -14476,3 +14476,62 @@ Decision:
 - Treat runtime-loaded Python helper modules as auditable source dependencies when they live under
   the scored candidate's `candidates/` tree. Keep dynamic extension-source tracing listed as
   missing unless candidates report those files or express them in a static `sources=[...]` form.
+
+## 2026-05-10 - Checkpoint 5.58: Capture runtime extension load sources
+
+Sources checked:
+
+- PyTorch C++/CUDA extension documentation,
+  `https://docs.pytorch.org/docs/2.11/cpp_extension.html`
+  - Useful fact: `torch.utils.cpp_extension.load(name, sources, ...)` JIT-compiles the given
+    C++/CUDA source paths into an extension, loads it into the current Python process, and accepts
+    `sources` as relative or absolute paths.
+
+Change:
+
+- Runtime candidate scoring now wraps `torch.utils.cpp_extension.load` while loading/scoring a
+  candidate and records source paths passed through the `sources` argument when they normalize
+  under the same `candidates/` tree.
+- The capture is best effort and narrow:
+  - it observes the extension loader call instead of tracing arbitrary filesystem writes;
+  - it accepts string/pathlike sources from positional or keyword `sources`;
+  - it normalizes only source-like files under `candidates/`;
+  - it restores the original PyTorch loader after candidate scoring.
+- If extension loading fails during candidate import, the failed score summary still includes the
+  observed `.cpp`/`.cu` source files so the repair loop can inspect the actual artifact that failed.
+- Runtime README, Ampere knowledge, retrieval claims, and retrieval tests now include runtime
+  `torch.utils.cpp_extension.load(sources=[...])` capture.
+
+Why:
+
+- The self-repair loop needs the real candidate source set. A candidate can dynamically JIT-load
+  CUDA sources during import, and a compile failure can happen before the module exposes
+  `attention`. Without recording the `sources` payload before the failure, lineage and repair would
+  know only that candidate import failed, not which CUDA files belonged to the failed attempt.
+- This is a small semantic move toward recoverable CUDA evolution: capture the auditable source
+  dependency at the tool boundary already used by candidates, without broad tracing or another
+  reactive ban list.
+
+Verification:
+
+- Focused runtime extension, failure, dynamic import, and retrieval tests:
+  - `uv run pytest tests/test_candidate_backend.py::test_candidate_backend_reports_runtime_torch_extension_sources tests/test_candidate_backend.py::test_candidate_backend_keeps_runtime_torch_extension_sources_on_load_failure tests/test_candidate_backend.py::test_candidate_backend_reports_runtime_imported_candidate_sources tests/test_knowledge.py::test_real_ampere_corpus_retrieves_useful_claims -q`:
+    passed, 39 tests.
+- Affected suites:
+  - `uv run pytest tests/test_candidate_backend.py tests/test_evolve.py tests/test_knowledge.py -q`:
+    passed, 156 tests.
+- Retrieval query:
+  - `uv run python -m avo knowledge-search knowledge/ampere.md --query "candidate runtime torch cpp_extension load sources dynamic import AVO_SOURCE_FILES __avo_source_files__ lineage snapshot" --max-chunks 4 --max-chars 6000`:
+    returned the updated runtime extension source-capture claim.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 438 tests.
+
+Decision:
+
+- Treat runtime-observed `torch.utils.cpp_extension.load(sources=[...])` paths as auditable
+  candidate sources when they are under `candidates/`. Keep generated source files that are never
+  imported, extension-loaded, or declared via manifest out of automatic capture for now; broad
+  filesystem tracing is a larger, riskier mechanism than this checkpoint needs.
