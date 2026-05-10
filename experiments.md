@@ -11144,3 +11144,64 @@ Decision:
 - This is a better root fix than another reactive guard: it tightens the tool contract so the model
   has to make the executable edit channel explicit every turn, while keeping the same validation and
   retry behavior for bad semantic payloads.
+
+## 2026-05-10 - Checkpoint 4.95: Relax async-copy granularity preflight
+
+Success criteria for this checkpoint:
+
+- Keep hard preflights for structural invariants, not CUDA phrase-level preferences.
+- Let coherent async-copy hypotheses reach compile and compile-repair even when the copy granularity
+  looks weak.
+- Preserve the raw CUDA diff ban and the structured transform interface.
+- Verify the planner validation and tests after the change.
+
+Loop evidence before the change:
+
+- A four-step evolve-loop with the explicit `candidate_transform` schema ran to `max_steps` with no
+  accepted candidate.
+- Step 1 compiled a structured Q shared-memory staging transform for the MMA kernel:
+  - ptxas used 44 registers, 1 barrier, and 14016 bytes shared memory;
+  - cleanup after the compile-only check succeeded.
+- Step 2 scored that pending transform on the realistic A6000 target lane:
+  - `all_correct=true`;
+  - geomean `6.6941 TFLOPS`;
+  - rejected versus best geomean `7.7776 TFLOPS`.
+- Step 3 compiled a repaired V async-pipeline staging transform after a failed first attempt. This
+  confirmed the compile self-repair path can produce a compiling CUDA candidate without manual edit.
+- Step 4 scored the repaired V async-pipeline transform:
+  - `all_correct=true`;
+  - geomean `6.7332 TFLOPS`;
+  - rejected versus best geomean `7.7776 TFLOPS`.
+
+Runtime fix:
+
+- Removed the always-on `async_copy_granularity` structural preflight. Scalar BF16
+  `__pipeline_memcpy_async` granularity is now guidance for the planner and repair loop, not a
+  standalone pre-compile rejection.
+- Kept stronger structural preflights in place:
+  - raw CUDA diffs are still rejected in favor of `candidate_transform`;
+  - invalid async pipeline stage lifecycle is still rejected;
+  - templated `__pipeline_wait_prior<...>` API misuse is still rejected;
+  - no-effect wrapper/stub/dataflow checks remain active.
+- Updated the agent context and CUDA knowledge so vector-group async copies remain the preferred
+  Ampere direction, but the loop can validate concrete async-copy attempts through compile/score.
+
+Verification:
+
+- Focused runtime tests:
+  - scalar BF16 async-copy materialized CUDA patches now pass structural preflight when CUDA source
+    edits are explicitly allowed for materialized transforms;
+  - validation feedback now says to prefer vector-group async-copy dataflow while letting
+    compile/repair validate concrete errors.
+- Runtime full suite:
+  - `.venv/bin/python -m pytest -q`: passed, 372 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- The async-copy granularity rule was too strict as a hard gate. It encoded a useful CUDA preference
+  as a rejection before the agent could use compiler feedback or repair.
+- The better boundary is structural: reject edits that cannot be represented, violate known
+  lifecycle/API invariants, or have no executable dataflow. Let weak but coherent CUDA hypotheses
+  compile, fail, and self-repair.
