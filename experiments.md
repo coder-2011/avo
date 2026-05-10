@@ -14535,3 +14535,61 @@ Decision:
   candidate sources when they are under `candidates/`. Keep generated source files that are never
   imported, extension-loaded, or declared via manifest out of automatic capture for now; broad
   filesystem tracing is a larger, riskier mechanism than this checkpoint needs.
+
+## 2026-05-10 - Checkpoint 5.59: Add coherent block transform op
+
+Sources checked:
+
+- AgentPatterns.ai edit-format selection,
+  `https://agentpatterns.ai/tool-engineering/llm-edit-format-selection/`
+  - Useful fact: search/replace blocks and structure-aware edits reduce fragile line-numbered diff
+    commitments by anchoring edits to unique source content or coherent code spans.
+- Comby structural search/replace,
+  `https://comby.dev/`
+  - Useful fact: lightweight structural search/replace is useful because it lets tools operate on
+    code-shaped fragments instead of brittle raw regex or line-number patch mechanics.
+
+Change:
+
+- Runtime `candidate_transform` now supports `replace_block_once`.
+- `replace_block_once` uses the same exact unique-match materialization safety as `replace_once`,
+  but its interface and prompt wording are explicitly for coherent loop/body/helper replacement.
+- Planner prompts, retry feedback, README, and Ampere knowledge now distinguish:
+  - `replace_once` for single-line or small expression swaps;
+  - `replace_block_once` for coherent block-level semantic moves;
+  - `batch` for coordinated wrapper/kernel contract changes.
+- Semantic-claim validation treats `replace_block_once` as a real replacement op when checking
+  claims about reduced or relocated loads.
+
+Why:
+
+- The earlier transform interface solved raw CUDA diff failures, but it still nudged the planner
+  toward tiny text edits. The user correction was that the loop needs small semantic moves:
+  scoped, reviewable, recoverable, and tied to a hypothesis, not necessarily the smallest textual
+  diff.
+- This adds one block-level operation without introducing an AST parser or broad new patch format.
+  It gives the agent a clearer interface for replacing a coherent current code span while keeping
+  exact-match failure recovery and structural CUDA preflight unchanged.
+
+Verification:
+
+- Focused parser/schema/materialization tests:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_accepts_block_transform tests/test_agent.py::test_decision_tool_uses_strict_schema tests/test_evolve.py::test_run_decision_command_materializes_block_transform_before_command -q`:
+    passed, 3 tests.
+- Affected suites:
+  - `uv run pytest tests/test_agent.py tests/test_evolve.py tests/test_knowledge.py -q`:
+    passed, 350 tests.
+- Retrieval query:
+  - `uv run python -m avo knowledge-search knowledge/ampere.md --query "candidate_transform replace_block_once coherent loop body helper replacement semantic transform raw diff" --max-chunks 4 --max-chars 6000`:
+    returned the updated transform-interface claim.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 440 tests.
+
+Decision:
+
+- Keep `replace_block_once` as a content-anchored block transform, not a new raw diff channel. This
+  is enough to steer the planner toward coherent source spans while preserving the current
+  materialize/preflight/repair path.
