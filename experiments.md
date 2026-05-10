@@ -11733,3 +11733,34 @@ Decision:
 - The repair-memory fixes worked in live state: the loop moved on instead of rescoring stale K async.
 - Q shared-memory staging remains negative. Preserve Q in WMMA registers; do not spend more loop
   budget on standalone Q staging.
+
+## 2026-05-10 - Checkpoint 5.06: Surface nested repair failures in attempt memory
+
+Success criteria for this checkpoint:
+
+- Make repair-loop failures visible to the next planner step instead of summarizing them only as
+  `repairs=N`.
+- Keep the summary compact enough to remain useful in long loops.
+- Verify the live attempt summary exposes the ambiguous-anchor repair failure from checkpoint 5.05.
+
+Runtime fix:
+
+- Attempt-history summaries now include compact details for the last one or two repair attempts:
+  failure class, command status, patch status, score status, and command.
+- No-repair steps remain terse; they do not emit filler text.
+
+Verification:
+
+- Focused test:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_includes_repair_attempt_failures -q`: passed.
+- Focused lint:
+  - `.venv/bin/ruff check avo/evolve.py tests/test_evolve.py`: passed.
+- Runtime summary sanity check:
+  - latest summary now includes `repair_details=repair(class=structured_transform_preflight, ... expected exactly one anchor ...)`.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 377 tests.
+
+Decision:
+
+- This is an attempt-memory quality fix. It gives the planner the concrete nested repair failure
+  without adding another CUDA-specific hard guard.
