@@ -11609,3 +11609,36 @@ Decision:
   much slower than the Q-fragment-reuse best.
 - The next useful CUDA direction should either score a genuinely repaired K async path with correct
   per-tile offsets and stage lifetime, or move to a wider FA2-like scheduling/dataflow transform.
+
+## 2026-05-10 - Checkpoint 5.03: Keep pending-transform autofill out of repairs
+
+Success criteria for this checkpoint:
+
+- Fix the repair-loop issue observed in checkpoint 5.02, where a correctness-repair request could
+  reattach the same pending compiled transform instead of requiring a revised edit.
+- Keep pending-transform autofill available for normal top-level follow-up scoring.
+- Verify rejected repair edits still clean up the worktree.
+
+Runtime fix:
+
+- Immediate compile/materialization/correctness repair requests now call the agent without the
+  pending-transform payload normalizer.
+- Top-level planning still uses the normalizer, so "score the previously compiled transform" can
+  continue to attach the exact pending transform after a compile-only step.
+- Added a regression test that creates a pending compiled transform, simulates a correctness-failing
+  score of that same transform, then verifies the repair call receives no autofill normalizer and
+  the failed patch is reverted.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_cli.py::test_repair_loop_does_not_autofill_pending_transform tests/test_cli.py::test_evolve_once_repairs_candidate_correctness_failure_before_finishing tests/test_cli.py::test_pending_transform_payload_normalizer_attaches_transform_to_score -q`: passed, 3 tests;
+  - `.venv/bin/ruff check avo/cli.py tests/test_cli.py`: passed;
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 375 tests.
+
+Decision:
+
+- This is a repair-interface fix. A repair decision must now provide an explicit changed edit
+  payload; the loop will not silently turn a repair retry into the same failed transform.
