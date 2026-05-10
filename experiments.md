@@ -12579,3 +12579,50 @@ Decision:
 - The classifier fix helped: the loop did score another shared-staging variant, recorded it as a
   shared-memory regression, and then moved to a synchronization-family candidate. The remaining
   weakness is command selection and acceptance confidence, not raw CUDA diff handling.
+
+## 2026-05-10 - Checkpoint 5.23: Add one-shot acceptance confidence and command recovery
+
+Success criteria for this checkpoint:
+
+- Prevent near-tie one-shot timing scores from entering lineage as accepted improvements.
+- Stop advertising `avo profile` to the planner when the runtime cannot support Nsight/CUPTI.
+- Recover from a repeated successful compile-only transform by scoring the pending transform when
+  the target seed can be inferred.
+- Preserve the corrected local lineage state after the noisy syncwarp-removal acceptance.
+
+Change:
+
+- Runtime `avo/lineage.py` now rejects one-shot score payloads (`repeats<=1`, `warmup<=1`) unless
+  they improve the current same-signature best by at least `0.5%`. Low-margin candidates must be
+  rerun with `repeats>=3` and `warmup>=2` or find a larger improvement.
+- Runtime `avo/agent.py` now builds the variation prompt from runtime profiler availability:
+  when the Thunder/CUPTI marker is present, the allowed command list is `env, compile, score` and
+  profile is described as unavailable.
+- Runtime `avo/cli.py` now normalizes a planner payload that repeats the exact pending successful
+  compile-only transform into a target `avo score` command for the matching seed family when the
+  transform path/source identifies MMA, warp-rows, or tiled attention.
+- Reverted the ignored nested `lineage/` commit that had recorded the noisy syncwarp-removal
+  candidate, leaving lineage latest at the syncwarp-present score
+  `9.507832270603132`.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_lineage.py tests/test_cli.py::test_pending_transform_payload_normalizer_attaches_transform_to_score tests/test_cli.py::test_pending_transform_payload_normalizer_rewrites_repeated_mma_compile_to_score tests/test_agent.py::test_build_variation_prompt_excludes_profile_when_unavailable tests/test_agent.py::test_decision_feedback_explains_unavailable_profile_error -q`: passed, 24 tests.
+- Affected suites:
+  - `.venv/bin/python -m pytest tests/test_lineage.py tests/test_cli.py tests/test_agent.py -q`: passed, 251 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/lineage.py avo/agent.py avo/cli.py tests/test_lineage.py tests/test_cli.py tests/test_agent.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 396 tests.
+- Real noisy-candidate regression check:
+  - New gate decision for the removed-syncwarp loop score versus corrected local lineage best:
+    `accepted=false`, reason `candidate improvement is within one-shot timing noise; rerun with
+    repeats>=3/warmup>=2 or improve geomean by at least 0.5%`.
+
+Decision:
+
+- Keep the syncwarp-present runtime kernel and corrected local lineage.
+- Future small timing wins can still be accepted, but only after stronger score settings or a
+  margin large enough to survive the one-shot noise filter.
