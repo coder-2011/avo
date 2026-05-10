@@ -15043,3 +15043,58 @@ Decision:
 - Detect async-copy score-time guidance from the captured error text, not by adding a new
   score-time failure class. The score-time class still correctly describes where the failure
   surfaced.
+
+## 2026-05-10 - Checkpoint 5.70: Add wall-clock budget to evolve-loop
+
+External sources checked:
+
+- Exa result, CODITECT Ralph Wiggum Autonomous Agent Guide,
+  `https://docs.coditect.ai/guides/ralph-wiggum-guide`
+  - Useful fact: long-running autonomous loops use max iterations, max duration, checkpoints,
+    health checks, and budget-exhaustion stop criteria.
+- Exa result, CODITECT `/ralph-loop`, `https://docs.coditect.ai/reference/commands/ralph-loop`
+  - Useful fact: loop managers evaluate termination between iterations, including max-duration
+    criteria.
+- Exa result, `treygoff24/autonomous-loop`, `https://github.com/treygoff24/autonomous-loop`
+  - Useful fact: Codex-style loop controllers rely on explicit gates, stop hooks, and persistent
+    contracts rather than an unbounded background loop.
+
+Change:
+
+- `avo evolve-loop` now accepts `--max-wall-time-s`.
+- The value must be positive when provided.
+- The loop checks the wall-clock deadline between candidate steps, records
+  `stopped_reason=max_wall_time`, and includes `max_wall_time_s` plus `elapsed_wall_time_s` in the
+  loop summary JSON.
+- README, Ampere knowledge, and retrieval claims now document the budget behavior and why it is
+  useful for long autonomous runs.
+
+Why:
+
+- Longer evolve runs need both a step budget and a duration budget. A high `--max-steps` alone can
+  run much longer than intended when candidate compile/score/repair steps are expensive.
+- The budget is checked between steps, not inside an active compile/score/repair attempt, so
+  cleanup and audit artifacts stay intact.
+
+Provider status:
+
+- No Anthropic planner call was made for this checkpoint. Anthropic live loops remain blocked by
+  the low-credit error recorded in Checkpoint 5.65.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_cli.py::test_evolve_loop_stops_between_steps_after_wall_time tests/test_cli.py::test_evolve_loop_runs_until_accepted_and_records_attempts tests/test_knowledge.py -q`:
+    passed, 56 tests.
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_knowledge.py -q`: passed, 101 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 459 tests.
+
+Decision:
+
+- Treat wall-clock time as a run-budget stop condition, not as active supervision policy. The
+  richer supervisor still needs to classify and repair candidate failures inside each step.
