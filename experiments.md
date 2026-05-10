@@ -11519,3 +11519,32 @@ Decision:
   in a follow-up only if the pending-transform logic still carries the exact transform.
 - Do not add a guard for V staging; the useful distinction is synchronous/no-overlap versus a real
   async pipeline.
+
+## 2026-05-10 - Checkpoint 5.01: Clarify score versus profile before planning
+
+Success criteria for this checkpoint:
+
+- Reduce wasted planner turns where the agent asks `avo score` for profiler-style evidence.
+- Keep this as command semantics, not a new reactive CUDA ban.
+- Verify the planner context and existing hard validation still agree.
+
+Runtime fix:
+
+- `build_repo_context` now states that `avo score` reports correctness validation, timing samples,
+  and TFLOPS only.
+- The same context states that score does not report bandwidth, occupancy, scheduler stalls,
+  instruction mix, or tensor-core utilization.
+- Existing validation still rejects score decisions that claim profiler evidence; this change
+  surfaces the contract before the planner chooses the command.
+
+Verification:
+
+- Focused runtime tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 185 tests;
+  - `.venv/bin/ruff check avo/agent.py tests/test_agent.py`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- The current change is a planner-information fix. It does not change CUDA preflight policy or add a
+  new attempt-specific phrase ban.
