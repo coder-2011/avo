@@ -12931,3 +12931,42 @@ Decision:
 - Treat async-copy width as a performance advisory unless it is tied to an actual structural
   invalidity. The agent should be able to compile/repair coherent async-copy hypotheses, then learn
   from score and compiler evidence.
+
+## 2026-05-10 - Checkpoint 5.29: Drain compiled transforms at loop step limit
+
+Problem:
+
+- The longer evolve loop after soft CUDA advisories ended cleanly at `max_steps`, but the final
+  step was a successful compile-only structured transform.
+- That left the candidate unresolved until a future loop, which violates the search-loop invariant:
+  a coherent semantic move that compiles should be scored or explicitly rejected before the loop
+  considers the attempt sequence resolved.
+
+Change:
+
+- Runtime `avo/cli.py` now records loop steps through one helper and, when the normal loop would
+  stop at `max_steps`, checks for a pending compile-only structured transform.
+- If one exists and its candidate seed path has a known validation command, the loop creates a
+  deterministic score decision for the exact same `candidate_transform` and records that extra
+  drain step.
+- The drain score still goes through `run_decision_command`, `finalize_attempt`, cleanup, and the
+  existing compile/correctness repair loop. It does not ask the planner to rediscover the pending
+  transform.
+
+Verification:
+
+- Focused regression:
+  - `.venv/bin/python -m pytest tests/test_cli.py::test_evolve_loop_scores_pending_compile_transform_at_step_limit tests/test_cli.py::test_evolve_loop_runs_until_accepted_and_records_attempts tests/test_cli.py::test_pending_transform_payload_normalizer_rewrites_repeated_mma_compile_to_score -q`: passed, 3 tests.
+- Affected suite:
+  - `.venv/bin/python -m pytest tests/test_cli.py -q`: passed, 38 tests.
+- Lint:
+  - `.venv/bin/python -m ruff check avo tests`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 404 tests.
+
+Decision:
+
+- Keep normal planner-driven behavior during the requested step budget.
+- Treat the deterministic drain as completion of an already-started candidate evaluation, not as a
+  new planner budget step. This keeps `max_steps` from splitting compile and score across separate
+  operator runs.
