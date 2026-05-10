@@ -14355,3 +14355,62 @@ Decision:
 - Keep candidate acceptance based on prior candidate scores for the same benchmark signature.
   Report FA2 gap explicitly so the planner has a concrete optimization target without rejecting
   useful intermediate candidates.
+
+## 2026-05-10 - Checkpoint 5.56: Keep compile repair from cycling failed payloads
+
+Sources checked:
+
+- NVIDIA CUDA Programming Guide, asynchronous data copies,
+  `https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/async-copies.html`
+  - Useful fact: CUDA async-copy completion is coordinated explicitly; the relevant hard
+    correctness questions are completion, synchronization, and dataflow, not a standalone ban on a
+    narrow copy size.
+- NVIDIA libcu++ `cuda::memcpy_async` reference,
+  `https://nvidia.github.io/cccl/unstable/libcudacxx/extended_api/asynchronous_operations/memcpy_async.html`
+  - Useful fact: on Ampere+, `cuda::memcpy_async` may lower to `cp.async` for aligned
+    global-to-shared copies, with at least 4-byte alignment required by the documented conditions.
+- NVIDIA Ampere Tuning Guide,
+  `https://docs.nvidia.com/cuda/ampere-tuning-guide/`
+  - Useful fact: Ampere adds hardware acceleration for asynchronous global-to-shared copies and
+    exposes the feature through CUDA pipeline APIs.
+
+Change:
+
+- Runtime repair loops now keep episode-local memory of every failed edit payload during immediate
+  compile, transform-materialization, and correctness repair.
+- The next repair prompt includes earlier failed edit payloads from the same repair episode.
+- Runtime validation rejects a repair decision that repeats any earlier failed payload from the
+  same episode, not only the immediately previous failed payload.
+- Runtime README, Ampere knowledge, retrieval claims, and retrieval tests document the behavior.
+
+Why:
+
+- The agent should fix its own compile/correctness/materialization errors instead of cycling among
+  failed edits. Before this change, repair attempt 2 could accidentally replay the original failed
+  payload if repair attempt 1 was different, because the unchanged-payload check only compared with
+  the immediate failed attempt.
+- This is not another CUDA phrase ban. It is small episode-local state for the repair loop:
+  scoped, reviewable, recoverable, and tied to the clear hypothesis that repeated failed payloads do
+  not repair the compiler or correctness error.
+
+Verification:
+
+- Focused repair and retrieval tests:
+  - `uv run pytest tests/test_cli.py::test_evolve_once_rejects_repair_that_repeats_earlier_failed_payload tests/test_cli.py::test_evolve_once_repairs_candidate_compile_failure_before_finishing tests/test_knowledge.py::test_real_ampere_corpus_retrieves_useful_claims -q`:
+    passed, 38 tests.
+- Retrieval query:
+  - `uv run python -m avo knowledge-search knowledge/ampere.md --query "compile repair episode failed edit payload replay rejected" --max-chunks 4 --max-chars 6000`:
+    returned the new repair-loop claim and Ampere note.
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_knowledge.py -q`: passed, 89 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 435 tests.
+
+Decision:
+
+- Keep failed repair edits as repair-loop memory, not persistent global bans. Future repairs may
+  revisit a family with a materially different semantic transform, but exact failed payload replays
+  inside the same repair episode are rejected before execution.
