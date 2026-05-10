@@ -14952,3 +14952,53 @@ Decision:
 
 - Keep async-copy granularity as guidance and async-copy compile errors as repairable feedback.
   Promote only concrete structural failures, not the broad fact that an async-copy attempt failed.
+
+## 2026-05-10 - Checkpoint 5.68: Add directed async-copy repair guidance
+
+External sources checked:
+
+- Exa result, RepairAgent, `https://arxiv.org/pdf/2403.17134`
+  - Useful fact: program-repair loops are stronger when they feed compilation/test feedback into
+    the next repair attempt instead of only running a fixed retry loop over the same context.
+- Exa result, ARCS, `https://arxiv.org/html/2504.20434v2`
+  - Useful fact: budgeted synthesize-execute-repair loops can stay replayable while encoding
+    execution feedback into targeted prompt repair.
+
+Change:
+
+- Compile-repair prompts now include one class-specific guidance line when
+  `failure_class=async_copy_compile_error`.
+- The guidance tells the agent to repair async-copy API/include/stage/dataflow issues and not treat
+  copy granularity alone as a hard rejection or return a revert-only edit.
+- README, Ampere knowledge, and retrieval claims now describe this prompt boundary.
+
+Why:
+
+- Checkpoint 5.67 kept async-copy compile failures out of hard preflight promotion, but the repair
+  prompt only exposed the class label. That left too much room for the planner to interpret the
+  class as another soft ban instead of a repair target.
+- This is still a tiny semantic move: only async-copy compile repairs get the extra line, and hard
+  structural validators remain unchanged.
+
+Provider status:
+
+- No Anthropic planner call was made for this checkpoint. Anthropic live loops remain blocked by
+  the low-credit error recorded in Checkpoint 5.65.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_cli.py::test_compile_repair_prompt_gives_async_copy_guidance tests/test_knowledge.py -q`: passed, 54 tests.
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_evolve.py tests/test_agent.py tests/test_knowledge.py -q`:
+    passed, 405 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 457 tests.
+
+Decision:
+
+- Keep repair guidance class-specific. If another failure class needs directed guidance, add it
+  only after a concrete loop trace shows the generic repair prompt is too ambiguous.
