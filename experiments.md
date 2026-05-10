@@ -14247,3 +14247,54 @@ Decision:
 - Keep the historical nested-schema caveat in the knowledge base, but frame it as a provider
   compatibility failure if it recurs, not as evidence that CUDA search or native semantic
   transforms are wrong.
+
+## 2026-05-10 - Checkpoint 5.54: Capture runtime-declared candidate sources
+
+Sources checked:
+
+- Python data model documentation,
+  `https://docs.python.org/3/reference/datamodel.html`
+  - Useful fact: module `__file__` is the loaded file path when available, so using a candidate
+    module's own `__file__` to report sibling runtime sources is a standard Python mechanism.
+- Python `os` documentation,
+  `https://docs.python.org/3/library/os.html`
+  - Useful fact: `os.PathLike` and `os.fspath` are the standard interface for accepting both string
+    paths and path objects.
+
+Change:
+
+- Runtime `avo/benchmark.py` now records `candidate_source_files` in candidate score summaries when
+  a loaded candidate module exposes `AVO_SOURCE_FILES` or `__avo_source_files__`.
+- Runtime `avo/evolve.py` includes those declared source paths in accepted lineage snapshots after
+  normalizing them under `candidates/`.
+- Runtime README and knowledge claims now document the explicit runtime source manifest hook.
+
+Why:
+
+- Static AST discovery already captures direct local Python imports and static extension source
+  lists, but it cannot see sources assembled only when candidate code executes.
+- The narrow fix is an explicit manifest hook rather than a broad import tracer. It is reviewable,
+  candidate-controlled, and still constrained by the existing `candidates/` source-snapshot policy.
+
+Verification:
+
+- Focused behavior tests:
+  - `uv run pytest tests/test_candidate_backend.py::test_candidate_backend_reports_declared_runtime_source_files tests/test_evolve.py::test_finalize_attempt_snapshots_declared_runtime_source_files tests/test_knowledge.py::test_real_ampere_corpus_retrieves_useful_claims -q`:
+    passed, 36 tests.
+- Affected suites:
+  - `uv run pytest tests/test_candidate_backend.py tests/test_evolve.py tests/test_knowledge.py -q`:
+    passed, 151 tests.
+- Retrieval query:
+  - `uv run python -m avo knowledge-search knowledge/ampere.md --query "candidate runtime source manifest AVO_SOURCE_FILES __avo_source_files__ lineage snapshot" --max-chunks 4 --max-chars 6000`:
+    returned the new runtime-source-manifest claim.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 432 tests.
+
+Decision:
+
+- Keep automatic dynamic import tracing listed as missing for now. The runtime now has a clean
+  explicit reporting hook for dynamically assembled CUDA sources, but it does not attempt to trace
+  every import or extension load implicitly.
