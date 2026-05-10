@@ -13104,3 +13104,41 @@ Decision:
   correctness break.
 - Make the recovery path softer and more useful: feed the concise failure reason into the next
   planning context rather than expanding a reactive CUDA-specific ban list.
+
+## 2026-05-10 - Checkpoint 5.33: Promote only concrete hard preflight tracks
+
+Problem:
+
+- Planning feedback classes are useful context, but they are not always enforceable as hard
+  preflight checks.
+- Treating every recurring class as hard-promotable overclaims what the loop can actually enforce.
+  That was too close to the earlier "advice to the planner" failure mode.
+
+Change:
+
+- Runtime `avo/evolve.py` now persists promoted preflight state only when the recurring failure
+  class has concrete structural preflight checks.
+- Supervisor summaries still report recurring planning classes, but now say when no concrete hard
+  preflight track exists and route the signal back into planner feedback instead of claiming hard
+  enforcement.
+- Existing concrete CUDA classes such as stale symbols, syntax errors, and unsupported WMMA shapes
+  still promote to their structural preflight checks.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_planning_feedback_class_is_not_promoted_without_concrete_preflight tests/test_evolve.py::test_update_promoted_preflight_tracks_persists_recurring_class -q`:
+    passed, 2 tests.
+- Affected suite:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 88 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/python -m ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 406 tests.
+
+Decision:
+
+- Keep a clear boundary: concrete recurring CUDA failure classes can become hard structural
+  preflights; planning feedback classes remain planner-memory unless/until there is a real check to
+  enforce.
