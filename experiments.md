@@ -12319,6 +12319,14 @@ Verification:
   - `git diff --check`: passed.
 - Full runtime suite:
   - `.venv/bin/python -m pytest -q`: passed, 386 tests.
+- Real attempt-history check:
+  - `summarize_attempt_history(Path("attempts"), limit=12)` now classifies the 06:28Z loop's
+    `kThreads=32`, `kThreads=128`, and scored thread retunes as
+    `thread_count_or_warp_mapping`.
+  - The same summary classifies the `kQueryTilesPerBlock=2` compile and score attempts as
+    `query_tile_work_mapping`.
+  - The semantic-family signal now reports `thread_count_or_warp_mapping(count=6)` on the real
+    unaccepted tail.
 
 Decision:
 
