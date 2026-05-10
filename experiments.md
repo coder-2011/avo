@@ -14899,3 +14899,56 @@ Decision:
 
 - Keep the recent tail as the priority. Older context is recoverable from durable state and
   breadcrumbs, while losing the newest interaction would directly weaken repair behavior.
+
+## 2026-05-10 - Checkpoint 5.67: Keep async-copy compile errors repairable
+
+External sources checked:
+
+- Exa search result, NVIDIA CUDA Programming Guide, `4.10. Pipelines`,
+  `https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/pipelines.html`
+  - Useful fact: CUDA pipelines are producer/consumer stage mechanisms; useful async copies need
+    acquire, submit, commit, wait, consume, and release structure rather than only a copy call.
+- Exa search result, NVIDIA CCCL/libcu++ `cuda::memcpy_async`,
+  `https://nvidia.github.io/cccl/unstable/libcudacxx/extended_api/asynchronous_operations/memcpy_async.html`
+  - Useful fact: on Ampere+ `cuda::memcpy_async` may lower to `cp.async` for aligned
+    global-to-shared copies with at least 4-byte alignment. This supports treating 16-byte groups
+    as the preferred throughput shape, not as the only repairable compile path.
+
+Change:
+
+- Runtime compile-failure classification now emits `async_copy_compile_error` when compile stderr
+  mentions async-copy APIs such as `cp.async`, `__pipeline*`, or `cuda::memcpy_async`.
+- `async_copy_compile_error` is not in the promotable hard-preflight map, so recurring async-copy
+  API/compile failures stay as repair feedback unless a concrete structural invariant is violated.
+- README, Ampere knowledge, and retrieval claims now describe this boundary.
+
+Why:
+
+- The prior behavior could classify an async-copy compile failure as generic `cuda_syntax_error` or
+  `stale_or_undefined_symbol`. Those classes can promote to hard preflight tracks that are useful
+  for real syntax/symbol patterns but too blunt for async-copy API iteration.
+- This keeps hard checks for actual invariants, such as invalid pipeline lifecycle or disconnected
+  helper code, while letting coherent async-copy dataflow attempts reach compile repair.
+
+Provider status:
+
+- No Anthropic planner call was made for this checkpoint. Anthropic live loops remain blocked by
+  the low-credit error recorded in Checkpoint 5.65.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_evolve.py::test_async_copy_compile_errors_are_not_promoted_to_hard_preflight tests/test_evolve.py::test_update_promoted_preflight_tracks_persists_recurring_class tests/test_evolve.py::test_update_promoted_preflight_tracks_persists_mixed_recurring_classes tests/test_knowledge.py -q`: passed, 55 tests.
+- Affected suites:
+  - `uv run pytest tests/test_evolve.py tests/test_agent.py tests/test_knowledge.py -q`:
+    passed, 358 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 455 tests.
+
+Decision:
+
+- Keep async-copy granularity as guidance and async-copy compile errors as repairable feedback.
+  Promote only concrete structural failures, not the broad fact that an async-copy attempt failed.
