@@ -11764,3 +11764,77 @@ Decision:
 
 - This is an attempt-memory quality fix. It gives the planner the concrete nested repair failure
   without adding another CUDA-specific hard guard.
+
+## 2026-05-10 - Checkpoint 5.07: K-staging follow-up after repair-summary fix
+
+Success criteria for this checkpoint:
+
+- Run a bounded loop after nested repair failures are visible in attempt memory.
+- Score pending compile-only K cooperative staging evidence instead of leaving it as compile-only.
+- Clean up any interrupted candidate patch before ending the checkpoint.
+
+Runs:
+
+```bash
+timeout 14400 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 3600 \
+  --max-steps 4 \
+  --compile-repair-attempts 3 \
+  --attempts-dir ./attempts \
+  --attempt-limit 40 \
+  --loop-json attempts/loop_after_repair_summary_fix_20260510T0501Z.json
+```
+
+```bash
+timeout 7200 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 3600 \
+  --max-steps 2 \
+  --compile-repair-attempts 3 \
+  --attempts-dir ./attempts \
+  --attempt-limit 40 \
+  --loop-json attempts/loop_score_pending_k_coop_20260510T0511Z.json
+```
+
+Result:
+
+- First loop exit code `2`, `completed_steps=4`, `stopped_reason=max_steps`.
+- Follow-up loop was interrupted during a later step after the useful score/repair chain had already
+  been written; no loop JSON was emitted.
+- No accepted candidate.
+
+Evidence:
+
+- K cooperative shared staging compiled with 64 registers, 1 barrier, 14016 bytes shared memory, and
+  no spills.
+- The matching full-target score passed correctness but regressed:
+  - `all_correct=true`;
+  - geomean `4.40940675249885` TFLOPS;
+  - rejected versus current best `8.960753680686471`.
+- A padded `k_tile[kTile][kHeadDim + 1]` variant compiled with 64 registers, 1 barrier, 14048 bytes
+  shared memory, and no spills.
+- Repair/scoring attempts for padded or transposed K shared-memory layouts failed correctness:
+  - non-finite outputs;
+  - CUDA unknown errors;
+  - tolerance failure.
+
+Cleanup:
+
+- Interrupting the follow-up loop left an in-flight generated K-staging patch in the worktree.
+- I reversed the current generated diff for `candidates/cuda_mma_attention/attention_kernel.cu` and
+  verified the runtime repo worktree returned clean.
+- No AVO compile/score/evolve process remained running.
+
+Decision:
+
+- Standalone K shared-memory staging is now strongly negative for this seed. It is either correct
+  but far slower, or layout repairs fail correctness.
+- Future K work should be part of a broader pipeline/dataflow change, not another isolated
+  cooperative K staging variant.
