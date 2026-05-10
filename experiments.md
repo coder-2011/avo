@@ -11343,3 +11343,74 @@ Decision:
   one or more immediate revised executable edits before the top-level loop moves on.
 - Throughput regressions remain normal gate rejections. Repairing those immediately would blur
   search with local debugging and is not the same class as a correctness violation.
+
+## 2026-05-10 - Checkpoint 4.98: Accept Q-fragment register reuse candidate
+
+Success criteria for this checkpoint:
+
+- Run a bounded live evolve-loop after adding correctness-repair support.
+- Accept a candidate only if it passes the full realistic A6000 BF16 score lane.
+- Preserve and commit the accepted runtime candidate source.
+- Record the accepted lineage evidence and update the runtime knowledge base.
+
+Run:
+
+```bash
+timeout 10800 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 2400 \
+  --max-steps 4 \
+  --compile-repair-attempts 3 \
+  --attempts-dir ./attempts \
+  --attempt-limit 28 \
+  --loop-json attempts/loop_correctness_repair_20260510T0402Z.json
+```
+
+Result:
+
+- Exit code `0`.
+- `completed_steps=3`, `stopped_reason=accepted`.
+- Lineage accepted commit: `c0b53dd evolve: accept candidate`.
+- Runtime accepted source: `candidates/cuda_mma_attention/attention_kernel.cu`.
+
+Step summary:
+
+- Step 1 failed planning validation after the planner retried unsupported `avo profile` requests in
+  the Thunder runtime. No command executed.
+- Step 2 compiled a Q-register-reuse transform after two repair attempts:
+  - initial repair attempt failed compile because `q_frags` was scoped inside the warp guard and then
+    used outside that lexical scope;
+  - the repaired transform declared `q_frags[8]` outside the key-tile loop, loaded the eight Q WMMA
+    fragments once, and reused them inside the QK loop;
+  - ptxas reported 64 registers, 1 barrier, 9920 bytes shared memory, and no spills.
+- Step 3 scored the compiled transform on the realistic target lane:
+  - all 8 BF16 cases passed correctness;
+  - geomean `8.960753680686471` TFLOPS;
+  - prior best geomean was `7.777584666360881` TFLOPS;
+  - gate accepted the candidate.
+
+Per-case accepted score:
+
+- seq4096: noncausal `12.5894` TFLOPS, causal `6.3634` TFLOPS.
+- seq8192: noncausal `12.8563` TFLOPS, causal `6.3876` TFLOPS.
+- seq16384: noncausal `12.6888` TFLOPS, causal `6.2818` TFLOPS.
+- seq32768: noncausal `12.7451` TFLOPS, causal `6.2195` TFLOPS.
+
+Verification:
+
+- Runtime loop score: all accepted cases correct.
+- Runtime full suite after applying the accepted source:
+  - `.venv/bin/python -m pytest -q`: passed, 373 tests;
+  - `.venv/bin/ruff check .`: passed;
+  - `git diff --check`: passed.
+
+Decision:
+
+- Q-fragment register reuse is now the best local MMA candidate direction.
+- The accepted improvement is not from shared memory or async copy; it removes repeated global Q
+  fragment loads by keeping Q in WMMA fragments across the key-tile loop.
+- Future search should preserve this Q-in-register reuse while exploring K/V traffic, PV/softmax
+  scheduling, or broader FA2-like pipelining.
