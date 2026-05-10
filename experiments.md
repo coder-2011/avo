@@ -14109,3 +14109,51 @@ Decision:
 - Keep the retry compaction deterministic and local to the prompt builder. Do not introduce a
   second reviewer model or learned context pruner until a concrete Anthropic trace shows the
   deterministic section/tail strategy is insufficient.
+
+## 2026-05-10 - Checkpoint 5.51: Tighten empty score correctness reporting
+
+Sources checked:
+
+- NVIDIA CUDA Runtime API event documentation,
+  `https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__EVENT.html`
+  - Useful fact: CUDA events are the right GPU-side timing primitive for elapsed milliseconds, with
+    completion/synchronization caveats. This matches AVO's worker-side event timing plus explicit
+    synchronization path.
+- PyTorch `scaled_dot_product_attention` documentation,
+  `https://docs.pytorch.org/docs/2.12/generated/torch.nn.functional.scaled_dot_product_attention.html`
+  - Useful fact: SDPA computes query/key/value attention with optional causal masking, and dropout is
+    disabled only by passing `dropout_p=0.0`. This matches AVO's correctness reference call.
+
+Change:
+
+- Runtime `avo/benchmark.py` now reports `all_correct=false` for an empty case set.
+- Added `tests/test_benchmark_math.py::test_score_summary_treats_empty_case_set_as_not_correct`.
+
+Why:
+
+- The lineage gate already rejects empty case sets, and normal CLI parsing requires at least one
+  sequence length. Still, the score summary itself was overstating correctness for `scores=[]`
+  because Python's `all([])` is true.
+- This keeps the scoring payload honest at its source: zero measured cases means no correctness
+  evidence, not a vacuous correctness pass.
+
+Verification:
+
+- Focused score/gate/isolation suites:
+  - `.venv/bin/python -m pytest tests/test_benchmark_math.py tests/test_candidate_backend.py tests/test_lineage.py tests/test_isolation.py -q`:
+    passed, 35 tests.
+- Live isolated A6000 score smoke:
+  - `timeout 300 .venv/bin/python -m avo score --backend torch-sdpa --seq-lens 4096 --causal false --warmup 1 --repeats 1 --trials 2 --timeout-s 240`:
+    passed through the parent/worker boundary with `all_correct=true`, A6000/sm86 metadata,
+    two CUDA-event timing samples, median 10.068 ms, and 109.208 TFLOPS for the single
+    non-causal BF16 seq4096 case.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 427 tests.
+
+Decision:
+
+- Keep empty-case rejection in both places: the score payload should not claim correctness without
+  cases, and the lineage gate should still reject malformed or empty score payloads defensively.
