@@ -12070,3 +12070,68 @@ Decision:
 
 - This should make the agent more honest about the actual CUDA move it materializes. It does not
   forbid V reuse; it requires a V-reuse claim to actually move or reduce V load sites.
+
+## 2026-05-10 - Checkpoint 5.13: Follow-up loop accepts kThreads=64 retune
+
+Success criteria for this checkpoint:
+
+- Run the evolve loop after claimed-load-reuse validation.
+- Check whether the loop distinguishes real V reuse from probability-fragment reuse.
+- Confirm any accepted candidate with a higher-repeat score before committing it to the runtime repo.
+
+Run:
+
+```bash
+timeout 21600 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 5400 \
+  --max-steps 8 \
+  --compile-repair-attempts 4 \
+  --attempts-dir ./attempts \
+  --attempt-limit 56 \
+  --loop-json attempts/loop_after_load_reuse_semantic_validation_20260510T0615Z.json
+```
+
+Result:
+
+- Loop stopped with `accepted=true`, `completed_steps=7`, `stopped_reason=accepted`.
+- The lineage repo committed `8326b53 evolve: accept candidate`.
+- The first step still failed planning validation because self-invalid detection treated historical
+  discussion of a previous bad K-staging repair as if the current proposal admitted it was invalid.
+- A cooperative K shared-memory staging candidate compiled and scored correct, but regressed to
+  `4.393552873015184` geomean TFLOPS versus best `9.157629176515384`.
+- A true V-fragment register-cache candidate compiled with 110 registers and scored correct, but
+  regressed to `8.359720357318682` geomean TFLOPS.
+- The accepted candidate changed `kThreads` from 128 to 64.
+
+Accepted candidate:
+
+- Gate score:
+  - all 8 full-target BF16 cases correct;
+  - geomean `9.168741394385114` TFLOPS versus previous gate best
+    `9.157629176515384`.
+- Confirmation score with repeats 3 and warmup 2:
+  - all 8 full-target BF16 cases correct;
+  - geomean `9.254126656665425` TFLOPS.
+- Compile evidence from the loop:
+  - sm86 target;
+  - 64 registers;
+  - 1 barrier;
+  - 9920 bytes shared memory;
+  - 0 spill stores/loads.
+
+Verification:
+
+- Full runtime suite after applying the accepted candidate:
+  - `.venv/bin/python -m pytest -q`: passed, 381 tests.
+
+Decision:
+
+- Keep `kThreads=64` as the current accepted runtime state, but treat it as a small resource retune,
+  not a major dataflow improvement.
+- Preserve the two dataflow wins already accepted: `q_frags[8]` reuse and `probability_frag` hoist.
+- Next reliability fix should narrow the self-invalid detector so historical discussion of a prior
+  failure does not invalidate a current corrected transform.
