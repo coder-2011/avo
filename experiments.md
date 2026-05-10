@@ -12695,3 +12695,37 @@ Decision:
 - Keep the implementation small and state-based rather than adding another planner phrase ban.
 - Future planner context should no longer treat reverted noisy acceptances as the live best merely
   because old attempt JSON still contains `gate accepted=true`.
+
+## 2026-05-10 - Checkpoint 5.25: Score pending V-pipeline transform
+
+Success criteria for this checkpoint:
+
+- Verify the stale-history fix changes planner state enough that it uses the corrected current
+  lineage best.
+- Resolve the pending compiled V-pipeline transform left at the end of the previous loop.
+
+Evidence:
+
+- `avo agent-plan --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file
+  ../avo/.env.local --attempts-dir ./attempts --attempt-limit 128` described the seed as
+  `9.51` TFLOPS, not the stale `9.54` TFLOPS syncwarp-removal score, and proposed scoring the
+  pending V-pipeline transform.
+- One scoped `evolve-once` scored that transform:
+  - `timeout 1800 .venv/bin/python -m avo evolve-once --lineage ./lineage --knowledge
+    knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s 900
+    --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 128 --step-json
+    attempts/evolve_once_score_pending_v_pipeline_20260510T1227Z.json`
+- The transform hoisted `v_frag` before the PV output-chunk loop and loaded the next V fragment at
+  the end of each chunk.
+- Result:
+  - all 8 full-target BF16 cases correct;
+  - candidate geomean `9.304493152841513` TFLOPS;
+  - current best geomean `9.507832270603132` TFLOPS;
+  - gate rejected with reason `candidate regressed geomean throughput`.
+
+Decision:
+
+- Do not keep the V-pipeline transform. It is a coherent semantic move, but the longer live
+  `v_frag` lifetime does not improve the current MMA seed.
+- The planner-context fix is doing its job: the next action was based on the corrected lineage best
+  and the pending-transform follow-up, not the reverted noisy score.
