@@ -14761,3 +14761,46 @@ Decision:
 
 - Keep the retry count fixed at one feedback retry for now. Increasing repair attempts should be a
   separate decision driven by live-loop evidence, not a default escape hatch.
+
+## 2026-05-10 - Checkpoint 5.64: Report companion source files during scoring
+
+External source checked:
+
+- Pantsbuild, `Dependency inference: Pants's special sauce`,
+  `https://pantsbuild.org/blog/2022/10/27/why-dependency-inference`
+  - Useful fact: file-level source/dependency inference is most useful when it is precise and
+    scoped; inferred metadata should reduce manual declarations without becoming arbitrary
+    filesystem discovery.
+
+Change:
+
+- Candidate scoring now adds scoped companion source directories to `candidate_source_files`.
+  For example, scoring `candidates/foo_seed.py` reports source files under `candidates/foo/`
+  and `candidates/foo_seed/` when those directories exist.
+- The fallback also runs on candidate load failure, so score-time compile repair prompts can still
+  see companion CUDA/C++ helpers when the Python candidate fails during extension setup.
+- README, Ampere knowledge, and retrieval claims now describe the boundary: companion directories,
+  imports, observed `torch.utils.cpp_extension.load` sources, and explicit manifests are captured;
+  arbitrary generated files outside those paths still require a manifest.
+
+Why:
+
+- The lineage finalizer already snapshots companion directories for accepted candidates, but the
+  score payload did not expose that source provenance to repair prompts.
+- This closes a practical repair-loop gap without scanning all of `candidates/` or pretending the
+  runtime can detect arbitrary filesystem writes.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_candidate_backend.py tests/test_knowledge.py -q`: passed, 60 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 448 tests.
+
+Decision:
+
+- Keep automatic discovery tied to candidate naming conventions and source suffix filtering. Wider
+  discovery should require a concrete failure trace before expanding the surface.
