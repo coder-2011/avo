@@ -12524,3 +12524,58 @@ Decision:
 
 - This improves the search loop's memory without adding a new ban. Future planner guidance should
   now steer away from exhausted shared-staging families without misclassifying unrelated CUDA edits.
+
+## 2026-05-10 - Checkpoint 5.22: Reject noisy syncwarp-removal acceptance
+
+Success criteria for this checkpoint:
+
+- Verify whether the classifier-guided follow-up loop picks a different semantic family after
+  repeated shared-staging regressions.
+- Do not keep a loop-accepted kernel edit unless it survives confirmation beyond one-shot gate
+  noise.
+
+Loop:
+
+- Command:
+  - `timeout 36000 .venv/bin/python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s 9600 --max-steps 12 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 112 --loop-json attempts/loop_after_family_classifier_fix_20260510T1118Z.json`
+- Result:
+  - `accepted=true`
+  - `completed_steps=6`
+  - `stopped_reason=accepted`
+
+Evidence:
+
+- The first attempt failed semantic validation because it claimed reduced/reused Q loads without a
+  transform that actually changed Q load sites.
+- A single-stage K shared-memory staging transform compiled and passed correctness, then regressed
+  to `3.594328062594656` geomean TFLOPS versus best `9.507832270603132`. This is correctly
+  `shared_memory_staging` negative evidence, not thread-count evidence.
+- Two planner turns were invalid orchestration decisions:
+  - one tried to repeat a successful compile-only transform instead of scoring it or changing
+    family;
+  - one requested `profile`, which is unavailable in this runtime.
+- The final candidate removed the explicit `__syncwarp()` after
+  `wmma::store_matrix_sync(scores, ...)`, leaving the following `__syncthreads()`. The one-shot
+  loop gate accepted it at `9.53940653329568` geomean TFLOPS versus gate best
+  `9.507832270603132`.
+
+Confirmation:
+
+- Removed-syncwarp candidate:
+  - `.venv/bin/python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 4096,8192,16384,32768 --total-tokens 32768 --num-heads 16 --head-dim 128 --dtype bf16 --causal both --repeats 3 --warmup 2 --timeout-s 600`
+  - Result: all 8 target cases correct.
+  - Geomean: `9.537755900752106` TFLOPS.
+- Restored-syncwarp A/B under the same confirmation settings:
+  - Result: all 8 target cases correct.
+  - Geomean: `9.544394274937641` TFLOPS.
+- Previous syncwarp confirmation remains stronger at `9.576586797806204` geomean TFLOPS.
+
+Decision:
+
+- Do not keep or commit the syncwarp-removal candidate. The worktree is back to the committed
+  syncwarp-present kernel.
+- Treat the loop acceptance as measurement noise around a synchronization boundary, not as a real
+  kernel improvement.
+- The classifier fix helped: the loop did score another shared-staging variant, recorded it as a
+  shared-memory regression, and then moved to a synchronization-family candidate. The remaining
+  weakness is command selection and acceptance confidence, not raw CUDA diff handling.
