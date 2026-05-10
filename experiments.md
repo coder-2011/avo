@@ -13458,3 +13458,70 @@ Decision:
 
 - This is not a CUDA phrase ban or a hard family ban. It is attempt-memory hygiene: exact scored
   regressions should not be proposed again unless the prior score was an environment failure.
+
+## 2026-05-10 - Checkpoint 5.40: Pending-transform history ordering and repair context
+
+Commands:
+
+- `AVO_AGENT_REQUEST_TIMEOUT_S=120 timeout 14400 .venv/bin/python -m avo evolve-loop --lineage
+  ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s
+  3600 --max-steps 6 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 420
+  --loop-json attempts/loop_after_repeat_guard_20260510T1636Z.json`
+- `AVO_AGENT_REQUEST_TIMEOUT_S=120 timeout 7200 .venv/bin/python -m avo evolve-loop --lineage
+  ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s
+  3600 --max-steps 1 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 420
+  --loop-json attempts/loop_after_attempt_order_fix_20260510T1859Z.json`
+
+Loop result:
+
+- The repeat-transform guard fired in the 6-step loop: one planner attempt was rejected with
+  `candidate_transform repeats a previously scored unaccepted transform`.
+- The loop also showed useful semantic validation: two later planner attempts were rejected for
+  Q-load reuse claims whose structured transform did not actually reduce or move Q load sites.
+- Compile self-repair worked: a multi-query-tile-per-block transform first failed with
+  `identifier "query_start" is undefined`; the repair moved output normalization/store into the
+  `local_tile` loop and compiled successfully.
+- The repaired transform then exposed two attempt-memory bugs:
+  - pending-transform lookup used filename order, so an older `evolve_once_...json` score sorted
+    after timestamped attempt records and masked the newer compile-only pending transform;
+  - after scoring a pending transform, correctness-repair validation still read only on-disk
+    attempts, so it could reject the repair as if the old compile-only transform were still
+    unresolved.
+
+Change:
+
+- Runtime `avo/evolve.py` now orders attempt records by `attempt.completed_at` / `started_at`
+  inside the JSON payload instead of by filename, with file mtime only as fallback.
+- `validate_decision_against_attempt_history` now accepts in-memory extra payloads.
+- Runtime `avo/cli.py` passes the current failed attempt into repair validation, so a just-scored
+  pending transform is considered resolved during correctness repair even before the enclosing
+  step has been written.
+
+Live validation:
+
+- After the timestamp-ordering fix, `pending_compile_only_transform(Path("attempts"))` returned
+  the real pending batch transform instead of `None`.
+- The 1-step validation loop entered `avo score` for that pending transform.
+- The candidate failed correctness on all target cases with
+  `RuntimeError: candidate output contains non-finite values`, so it was not accepted.
+- The resulting attempt record now clears the pending transform from history; a follow-up
+  `pending_compile_only_transform(Path("attempts"))` returned `None`.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_cli.py tests/test_evolve.py -q -k "repair_loop_allows_correctness_repair_after_pending_transform_score or pending_compile_transform_uses_payload_timestamps or scores_pending_compile_transform_at_step_limit"`:
+    passed, 3 tests.
+- Affected suites and hygiene:
+  - `.venv/bin/python -m pytest tests/test_evolve.py tests/test_cli.py -q`: passed, 133 tests.
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 415 tests.
+
+Decision:
+
+- Keep the multi-query-tile transform rejected by evidence, not by a new guard. It compiled after
+  self-repair, then failed correctness on the realistic validation workload.
+- Treat attempt history as chronological data from payload timestamps, not filename convention;
+  loop/manual artifact names should not change search memory semantics.
