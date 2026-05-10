@@ -15098,3 +15098,57 @@ Decision:
 
 - Treat wall-clock time as a run-budget stop condition, not as active supervision policy. The
   richer supervisor still needs to classify and repair candidate failures inside each step.
+
+## 2026-05-10 - Checkpoint 5.71: Add compiler diagnostic summaries to repair prompts
+
+External sources checked:
+
+- Exa result, Cycle self-refinement paper, `https://arxiv.org/pdf/2403.18746`
+  - Useful fact: iterative code self-refinement improves by feeding execution results and test
+    feedback back into the next repair prompt.
+- Exa result, RepairAgent, `https://arxiv.org/pdf/2403.17134`
+  - Useful fact: autonomous repair loops update the prompt from prior command/tool results and
+    keep the loop bounded by middleware instead of relying on an unstructured retry.
+- Exa result, SEIDR paper, `https://arxiv.org/pdf/2503.07693`
+  - Useful fact: synthesize-execute-debug-repair systems use execution and failing-test feedback
+    to repair near-miss candidates while preserving a separate ranking/selection loop.
+
+Change:
+
+- Immediate compile-repair prompts now include `compiler_diagnostic_summary`.
+- Score-time extension-build repair prompts now include `score_build_diagnostic_summary`.
+- The summaries extract likely source locations, referenced symbols, and key compiler/build lines
+  from the captured stderr/stdout or score error summary.
+- README, Ampere knowledge, retrieval claims, and retrieval tests now document/index this behavior.
+
+Why:
+
+- The agent should repair its own compile errors from concrete execution feedback. A failure class
+  alone is too coarse, while another hard preflight would make the loop stricter instead of more
+  capable.
+- This is deliberately not a new ban list. It preserves the existing bounded repair loop and gives
+  the next candidate edit better evidence about where and why the build failed.
+
+Provider status:
+
+- No Anthropic planner call was made for this checkpoint. Anthropic live loops remain blocked by
+  the low-credit error recorded in Checkpoint 5.65.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_cli.py::test_evolve_once_repairs_candidate_compile_failure_before_finishing tests/test_cli.py::test_evolve_once_repairs_score_time_extension_build_failure_before_finishing tests/test_cli.py::test_compile_repair_prompt_gives_async_copy_guidance tests/test_knowledge.py -q`:
+    passed, 58 tests.
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_knowledge.py -q`: passed, 102 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 460 tests.
+
+Decision:
+
+- Feed compiler evidence into repair prompts. Do not promote these extracted diagnostics to hard
+  preflight unless a separate recurring structural class proves it should be blocked before
+  execution.
