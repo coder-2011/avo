@@ -12279,3 +12279,49 @@ Decision:
 
 - This keeps correctness repair available, but makes the interface clearer: repair means a revised
   executable semantic move on clean source, not undoing a patch the loop already cleaned up.
+
+## 2026-05-10 - Checkpoint 5.17: Add semantic families for work-mapping retries
+
+Success criteria for this checkpoint:
+
+- Improve the search loop's memory for recurring failed optimization families without adding a hard
+  phrase ban.
+- Cover the repeated families seen in the 06:28Z loop: thread-count retunes and query-tile
+  work-mapping changes.
+- Verify that attempt-history summaries now surface those families.
+
+Research/context:
+
+- Exa search surfaced Reflexion-style agent papers that treat environment feedback as a semantic
+  memory signal, not only as immediate retry text. The useful design point for AVO is to generalize
+  failures into compact family labels that steer future attempts.
+- The local `pi-mono-agent` package shows a similar interface pattern at a lower level: validated
+  tool preflight and explicit tool-result events are first-class loop boundaries. For AVO, the
+  equivalent boundary is the structured candidate transform plus scored attempt summary.
+
+Change:
+
+- Runtime `avo/evolve.py` now classifies `kThreads`/`kWarps` retunes and thread/warp mapping text as
+  `thread_count_or_warp_mapping`.
+- Runtime `avo/evolve.py` now classifies `kQueryTilesPerBlock` and query-tiles-per-block rewrites as
+  `query_tile_work_mapping`.
+- Added regression tests showing that three unaccepted attempts in either family trigger the existing
+  semantic-family signal.
+
+Verification:
+
+- Focused evolve tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_flags_thread_count_family tests/test_evolve.py::test_summarize_attempt_history_flags_query_tile_work_mapping_family tests/test_evolve.py::test_summarize_attempt_history_flags_recurring_transform_family -q`: passed, 3 tests.
+- Evolve tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 80 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/evolve.py tests/test_evolve.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 386 tests.
+
+Decision:
+
+- This makes the loop more likely to move away from exhausted work-mapping families after repeated
+  measured regressions, while still allowing a future thread/work-mapping candidate if it changes the
+  actual dataflow, synchronization, or validation contract.
