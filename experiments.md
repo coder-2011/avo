@@ -11675,3 +11675,61 @@ Decision:
 
 - The next live loop should not be nudged into rescoring the known-bad K async transform solely
   because its failed score was nested under repair attempts.
+
+## 2026-05-10 - Checkpoint 5.05: Live loop after repair-memory fixes
+
+Success criteria for this checkpoint:
+
+- Verify the loop no longer treats the known-bad K async compile-only transform as pending after its
+  failed score appeared under `repair_attempts`.
+- Continue search from the Q-fragment-reuse best.
+- Record CUDA evidence from the next bounded loop.
+
+Research refresh:
+
+- Exa again surfaced Dao-AILab's SM80 mainloop and NVIDIA CUTLASS's Ampere FA2 CuTe example.
+- The useful signal was unchanged: real Ampere FA2 structure combines 128-bit `cp.async`, staged
+  K/V, tensor-core MMA, register pipelines, and online-softmax/PV integration. Isolated shared
+  staging remains a weak local move unless it changes consumed pipeline dataflow.
+
+Run:
+
+```bash
+timeout 14400 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 3600 \
+  --max-steps 4 \
+  --compile-repair-attempts 3 \
+  --attempts-dir ./attempts \
+  --attempt-limit 40 \
+  --loop-json attempts/loop_after_repair_memory_fix_20260510T0449Z.json
+```
+
+Result:
+
+- Exit code `2`.
+- `completed_steps=4`, `stopped_reason=max_steps`.
+- No accepted candidate.
+- The stale K async pending score did not repeat.
+
+Step summary:
+
+- Step 1 proposed K double-buffer shared-memory staging, but structural preflight rejected it because
+  the new staging buffers were not connected to executable dataflow.
+- Step 2 compiled a cooperative Q shared-memory staging transform:
+  - ptxas reported 63 registers, 1 barrier, 14016 bytes shared memory, and no spills.
+- Step 3 scored that exact Q staging transform:
+  - `all_correct=true`;
+  - geomean `7.645807821748137` TFLOPS;
+  - rejected versus current best `8.960753680686471`.
+- Step 4 failed planning validation after a repair attempt with ambiguous anchors and self-predicted
+  correctness risk.
+
+Decision:
+
+- The repair-memory fixes worked in live state: the loop moved on instead of rescoring stale K async.
+- Q shared-memory staging remains negative. Preserve Q in WMMA registers; do not spend more loop
+  budget on standalone Q staging.
