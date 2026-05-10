@@ -12135,3 +12135,41 @@ Decision:
 - Preserve the two dataflow wins already accepted: `q_frags[8]` reuse and `probability_frag` hoist.
 - Next reliability fix should narrow the self-invalid detector so historical discussion of a prior
   failure does not invalidate a current corrected transform.
+
+## 2026-05-10 - Checkpoint 5.14: Historical failure notes no longer self-invalidate current transforms
+
+Success criteria for this checkpoint:
+
+- Fix the planning validation bug observed in the 06:15Z evolve loop where a note about a previous
+  failed K-staging transform invalidated the current candidate.
+- Keep current self-invalid candidates rejected when the decision says the patch will fail or should
+  not be scored.
+- Verify the change with focused and full tests.
+
+Change:
+
+- Runtime `avo/agent.py` now treats planning windows that start as historical prior-failure context
+  and contain a failure signal as evidence, not as a current self-rejection.
+- The same historical-context filter is used by contract-only semantic validation, so a
+  `set_constexpr_int` retune is not rejected merely because the planner mentions a prior failed
+  K/shared-memory staging attempt.
+- Added a regression test using the concrete failure shape from the loop: a valid `kThreads=64`
+  transform whose risk text says the previous K tile shared-memory staging transform failed with
+  `key_start` undefined.
+
+Verification:
+
+- Focused regression and existing self-rejection tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_parse_variation_decision_allows_historical_failure_note tests/test_agent.py::test_parse_variation_decision_rejects_self_rejected_patch tests/test_agent.py::test_parse_variation_decision_rejects_do_not_use_this_diff_warning tests/test_agent.py::test_parse_variation_decision_rejects_do_not_score_self_invalid_patch -q`: passed, 4 tests.
+- Agent tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 189 tests.
+- Patch hygiene:
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 382 tests.
+
+Decision:
+
+- This is a small reliability fix, not a new preflight class. It reduces the reactive guard behavior
+  by allowing the planner to use prior failure information while still rejecting decisions that call
+  their own current edit invalid.
