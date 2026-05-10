@@ -11450,3 +11450,72 @@ Decision:
 - This addresses the planning-validation failure seen in the accepted-candidate loop without adding
   another reactive ban. The runtime fact is now in the planner's first context, and the existing
   validator remains the hard boundary if the planner still asks for profile.
+
+## 2026-05-10 - Checkpoint 5.00: Post-Q-reuse V-staging loop
+
+Success criteria for this checkpoint:
+
+- Refresh the Ampere/FA2 context online before the next live loop.
+- Verify that the new profile-unavailable planner context avoids the unsupported `avo profile`
+  failure.
+- Continue search from the accepted Q-fragment-reuse baseline.
+- Record negative and pending V-staging evidence without adding a new guard.
+
+Research consulted:
+
+- Exa found NVIDIA CUTLASS's current Ampere FA2 CuTe example. The relevant grounding is that a real
+  Ampere FA2 structure combines 128-bit `cp.async` Q/K/V movement, swizzled shared layouts, tensor
+  cores, a register pipeline, and online-softmax fusion.
+- Exa also surfaced Dao-AILab's SM80 mainloop showing the `Q_in_regs` pattern coupled to K/V
+  `cp_async` fence/wait stages around QK, softmax/rescale, and PV.
+
+Runtime knowledge update:
+
+- Added a note that the accepted `q_frags[8]` direction should be preserved.
+- Future semantic moves should target K/V stage scheduling, V/PV movement, softmax/PV overlap, or a
+  broader FA2-like pipeline rather than isolated synchronous shared tiles.
+
+Run:
+
+```bash
+timeout 10800 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 2400 \
+  --max-steps 4 \
+  --compile-repair-attempts 3 \
+  --attempts-dir ./attempts \
+  --attempt-limit 32 \
+  --loop-json attempts/loop_post_q_reuse_20260510T0416Z.json
+```
+
+Result:
+
+- Exit code `2`.
+- `completed_steps=4`, `stopped_reason=max_steps`.
+- No accepted candidate.
+- No unsupported `avo profile` attempt occurred; the profile context fix worked.
+
+Step summary:
+
+- Step 1 compiled a V single-stage shared-memory staging transform after one repair.
+- Step 2 scored that transform:
+  - `all_correct=true`;
+  - geomean `4.606980002471371` TFLOPS;
+  - rejected versus best geomean `8.960753680686471`.
+- Step 3 failed planning validation because the planner asked `avo score` for profiler-style
+  evidence. This is a remaining prompt-discipline issue, but the validator correctly blocked it.
+- Step 4 compiled a V double-buffer `cp.async` staging transform:
+  - ptxas reported 64 registers, 1 barrier, 18112 bytes shared memory, and no spills;
+  - cleanup succeeded because the step was compile-only and not accepted;
+  - the loop stopped before scoring it.
+
+Decision:
+
+- Synchronous single-stage V staging is negative evidence: correct but much slower.
+- The V double-buffer async candidate is pending evidence, not accepted evidence. It should be scored
+  in a follow-up only if the pending-transform logic still carries the exact transform.
+- Do not add a guard for V staging; the useful distinction is synchronous/no-overlap versus a real
+  async pipeline.
