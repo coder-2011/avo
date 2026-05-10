@@ -12862,3 +12862,72 @@ Decision:
   cleanup.
 - A future validation loop can use `AVO_AGENT_REQUEST_TIMEOUT_S=45` or another bounded value when
   testing orchestration behavior.
+
+## 2026-05-10 - Checkpoint 5.28: Make CUDA preflight guidance less brittle
+
+Success criteria for this checkpoint:
+
+- Validate that the bounded planner timeout lets a short loop reach compile/score transitions.
+- Keep hard structural preflights for invalid CUDA/search-loop states.
+- Move async-copy granularity from hard rejection territory into soft, structured guidance.
+- Preserve planner visibility into the warning so the agent can learn from it without losing the
+  compile/repair path.
+
+Validation loop:
+
+- Command:
+  - `AVO_AGENT_REQUEST_TIMEOUT_S=45 timeout 7200 .venv/bin/python -m avo evolve-loop --lineage
+    ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s
+    3600 --max-steps 4 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 180
+    --loop-json attempts/loop_after_forced_pending_score_timeout_20260510T1331Z.json`
+- Result:
+  - The loop completed all 4 requested steps and stopped at `max_steps`.
+  - It correctly alternated compile then score for the pending semantic transform twice.
+  - `mma_k_fragment_prefetch_v1` compiled, then scored correct but regressed to
+    `3.6639716243616083` geomean TFLOPS, so it was rejected.
+  - `mma_q_fragment_coop_load_v1` compiled, then scored correct but regressed to
+    `9.40853995478011` geomean TFLOPS against the current `9.507832270603132` best, so it was
+    rejected.
+  - No kernel was accepted.
+
+CUDA guidance source refresh:
+
+- NVIDIA CCCL/libcu++ `cuda::memcpy_async` docs say Ampere+ may use `cp.async` when data is
+  aligned to at least 4 bytes and the copy is global-to-shared.
+- The same docs show 16-byte aligned `cuda::aligned_size_t<16>` examples for stronger async-copy
+  shape.
+- NVIDIA pipeline docs emphasize producer acquire, async submission, producer commit, consumer
+  wait/release, converged commits, and valid producer/consumer lifecycle.
+
+Change:
+
+- Runtime `avo/agent.py` now has `CUDA_STRUCTURAL_ADVISORY_TRACKS` alongside the hard
+  `CUDA_STRUCTURAL_PREFLIGHT_TRACKS`.
+- Narrow async-copy sizes such as scalar BF16 `__pipeline_memcpy_async(...,
+  sizeof(__nv_bfloat16))` now trigger `async_copy_granularity_preference` as an advisory, not a
+  rejection.
+- Runtime `PatchResult` now records `advisories`, and attempt summaries include them when a patch
+  applies. This gives the next planner turn useful signal without blocking compile repair.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_structural_preflight_allows_scalar_bf16_async_copy_for_repair tests/test_agent.py::test_structural_advisory_flags_scalar_bf16_async_copy_without_rejecting tests/test_agent.py::test_structural_preflight_allows_non_scalar_async_copy_size_expression`: passed, 3 tests.
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_run_decision_command_records_soft_cuda_advisories tests/test_evolve.py::test_run_decision_command_preflights_materialized_cuda_transform`: passed, 2 tests.
+- Affected suites:
+  - `.venv/bin/python -m pytest tests/test_agent.py`: passed, 197 tests.
+  - `.venv/bin/python -m pytest tests/test_evolve.py`: passed, 86 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/python -m ruff check avo/agent.py avo/evolve.py tests/test_agent.py tests/test_evolve.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest`: passed, 403 tests.
+
+Decision:
+
+- Keep hard rejection for invalid structural CUDA states: malformed transform materialization,
+  unsupported WMMA contracts, stale symbols, no-effect helpers/buffers, invalid shared-tile scope,
+  and invalid async pipeline lifecycle.
+- Treat async-copy width as a performance advisory unless it is tied to an actual structural
+  invalidity. The agent should be able to compile/repair coherent async-copy hypotheses, then learn
+  from score and compiler evidence.
