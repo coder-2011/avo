@@ -14207,3 +14207,43 @@ Decision:
 
 - Prefer native nested JSON for semantic batch transforms. Keep `steps_json` only for backward
   compatibility and fallback response parsing.
+
+## 2026-05-10 - Checkpoint 5.53: Align transform batch retrieval knowledge
+
+Change:
+
+- Runtime `knowledge/ampere.md` now says batch `candidate_transform` calls should prefer native
+  `steps` arrays, with `steps_json` only as a legacy fallback.
+- Runtime `knowledge/retrieval_claims.md` has a retrieval claim for the preferred native batch
+  transform shape.
+- Runtime `tests/test_knowledge.py` now checks that the transform-interface query retrieves the
+  current native `steps` guidance and does not retrieve the old stale wording.
+
+Why:
+
+- After the strict Anthropic tool schema was updated, the runtime knowledge base still contained
+  older guidance saying the provider-facing batch interface advertised compact `steps_json`.
+  That contradicted the agent interface and could steer retrieved planner context back toward the
+  brittle JSON-in-a-string path.
+- This is a retrieval hygiene fix, not a new CUDA guard. The useful information is the current
+  interface invariant: batch transforms should be structured, native, reviewable, and recoverable;
+  the legacy string fallback exists for old traces and compatibility.
+
+Verification:
+
+- Focused retrieval query:
+  - `uv run python -m avo knowledge-search knowledge/ampere.md --query "candidate_transform batch native steps array steps_json legacy fallback" --max-chunks 4 --max-chars 6000`:
+    returned the new transform-interface claim and updated Ampere note.
+- Knowledge suite:
+  - `uv run pytest tests/test_knowledge.py -q`: passed, 43 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 429 tests.
+
+Decision:
+
+- Keep the historical nested-schema caveat in the knowledge base, but frame it as a provider
+  compatibility failure if it recurs, not as evidence that CUDA search or native semantic
+  transforms are wrong.
