@@ -15152,3 +15152,60 @@ Decision:
 - Feed compiler evidence into repair prompts. Do not promote these extracted diagnostics to hard
   preflight unless a separate recurring structural class proves it should be blocked before
   execution.
+
+## 2026-05-10 - Checkpoint 5.72: Include candidate module path in score-time repairs
+
+External sources checked:
+
+- Exa result, ARISE, `https://arxiv.org/html/2605.03117v1`
+  - Useful fact: repair/fault-localization agents benefit from explicit file-location records and
+    structured repair outputs rather than only broad task descriptions.
+- Exa result, RepairAgent, `https://arxiv.org/pdf/2403.17134`
+  - Useful fact: repair loops should let agents gather and use relevant code context; compiler/test
+    feedback alone is weaker if the prompt omits likely edit locations.
+- Exa result, Agentic Harness for Real-World Compilers,
+  `https://arxiv.org/html/2603.20075v1`
+  - Useful fact: compiler-repair harnesses pass concrete reproducer/component context and validation
+    feedback into the next synthesis step.
+
+Change:
+
+- Score-time compile-repair source context now includes the scored `candidate_path` before any
+  runtime-captured `candidate_source_files`.
+- The list is de-duplicated and still bounded to the first 20 entries.
+- README, Ampere knowledge, retrieval claims, and retrieval tests now describe the `candidate_path`
+  plus helper-source behavior.
+- Removed the stale README missing-work bullet claiming source capture for companion directories,
+  imports, extension sources, and source manifests was absent; that behavior is implemented and
+  covered by runtime tests.
+
+Why:
+
+- A Torch extension build can fail even when helper-source capture is partial or empty. The repair
+  prompt should still point the agent at the candidate wrapper module that initiated scoring.
+- This improves source grounding for self-repair without widening command execution, adding a new
+  preflight, or changing lineage acceptance.
+
+Provider status:
+
+- No Anthropic planner call was made for this checkpoint. Anthropic live loops remain blocked by
+  the low-credit error recorded in Checkpoint 5.65.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_cli.py::test_evolve_once_repairs_score_time_extension_build_failure_before_finishing tests/test_knowledge.py -q`:
+    passed, 56 tests.
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_knowledge.py -q`: passed, 102 tests.
+  - `uv run pytest tests/test_candidate_backend.py tests/test_evolve.py -q`: passed, 114 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 460 tests.
+
+Decision:
+
+- Treat `candidate_path` as the minimum source-location context for score-time compile repairs.
+  Runtime-discovered helper files remain additive evidence, not a prerequisite for repair.
