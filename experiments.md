@@ -11998,3 +11998,37 @@ Decision:
   validation failure and one invalid batch-size failure in the same run.
 - Future V/PV proposals must distinguish actual V reuse from probability-fragment reuse; do not
   accept rationale text as evidence of what changed.
+
+## 2026-05-10 - Checkpoint 5.11: Sharpen planner retry feedback for loop failures
+
+Success criteria for this checkpoint:
+
+- Use the failures observed in checkpoint 5.10 to improve the retry loop without adding another
+  CUDA-specific guard.
+- Make the correction for repeated unpatched MMA scores unambiguous: no no-edit score, no raw CUDA
+  patch, use structured-transform mode.
+- Make the correction for invalid transform batch sizes explicit before the attempt is logged.
+
+Runtime fix:
+
+- The validation feedback for recorded unpatched MMA seed scores now says to set
+  `edit_mode='transform'`, set `candidate_patch` to `''`, and provide one exact
+  `candidate_transform` operation or a scoped wrapper/kernel batch.
+- A new feedback hint handles `candidate_transform batch steps must contain 1 to 8 operations`:
+  return 1 to 8 primitive operations, use a single non-batch operation, or split oversized batches
+  into the smallest coherent semantic move.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_decision_feedback_explains_unpatched_mma_score_error tests/test_agent.py::test_decision_feedback_explains_transform_batch_size_error -q`: passed, 2 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/agent.py tests/test_agent.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 379 tests.
+
+Decision:
+
+- This is an agent-interface repair, not a new CUDA ban. It should help the planner fix malformed
+  decision payloads before the evolve loop wastes a step recording a planning-validation failure.
