@@ -13213,3 +13213,45 @@ Decision:
 - Keep V shared-memory staging and `kThreads=128` as measured regressions in attempt memory.
 - Next useful improvement is planner-side: favor transforms with verifiable semantic deltas in the
   source over generic "stage into shared memory" or pragma-only tuning claims.
+
+## 2026-05-10 - Checkpoint 5.35: Linewise insert materialization
+
+Problem:
+
+- The planning-feedback loop showed a structured transform with a coherent V-staging intent, but
+  the materialized diff glued inserted text onto existing CUDA lines:
+  - `old_scale[kTile];  __shared__ ...`
+  - `for (...) {    for (...) { ... }`
+- The candidate happened to compile, but this is a poor interface for kernel evolution. A scoped
+  `insert_after_once` or `insert_before_once` should produce a reviewable linewise edit even when
+  the planner omits a leading or trailing newline in the inserted text.
+
+Change:
+
+- Runtime `avo/evolve.py` now normalizes `insert_before_once` and `insert_after_once` materialized
+  text at the insertion boundary:
+  - add a leading newline when inserting after a line-fragment anchor;
+  - add a trailing newline when inserting before a line-fragment anchor;
+  - preserve explicit newlines when the planner already supplied them.
+- This is a transform-interface hardening change, not a CUDA guard. It makes small semantic moves
+  reviewable and recoverable without requiring the planner to hand-format raw diff whitespace.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_materialize_candidate_transform_inserts_after_anchor_on_new_line tests/test_evolve.py::test_materialize_candidate_transform_inserts_before_anchor_on_own_line -q`:
+    passed, 2 tests.
+- Affected suite:
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 90 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/python -m ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 408 tests.
+
+Decision:
+
+- Keep `replace_once` exact because it is intentionally a precise source transformation.
+- Make insert transforms linewise by default because most CUDA/Python source insertions are
+  statement/block insertions, and line-glued materialization is almost never the intended semantic
+  move.
