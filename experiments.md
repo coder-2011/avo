@@ -13966,3 +13966,52 @@ Decision:
 
 - Keep dependency discovery static and candidate-scoped. Do not execute candidate imports just to
   discover build sources; dynamic source discovery remains a future audit feature.
+
+## 2026-05-10 - Checkpoint 5.48: Budget long-run planner prompts
+
+Sources checked:
+
+- RepairAgent, `https://arxiv.org/pdf/2403.17134`
+  - Useful fact: the repair loop uses a dynamically updated prompt with static and dynamic
+    sections, including gathered information and the last command/result, so context management is
+    part of the agent interface rather than an afterthought.
+- Agent trajectory dynamics study, `https://www.arxiv.org/pdf/2506.18824`
+  - Useful fact: successful software-agent trajectories respond to prior results and avoid
+    repetitive action loops; preserving the newest result/follow-up evidence is more important
+    than preserving arbitrary old context verbatim.
+
+Change:
+
+- Runtime `avo/agent.py` now applies a final `MAX_VARIATION_PROMPT_CHARS` budget when building the
+  Anthropic variation prompt.
+- If dynamic sections would exceed the budget, the prompt compacts bulky repo context, knowledge,
+  lineage, and then attempt history.
+- Attempt history is tail-preserved so immediate repair requests, supervisor signals, and exact
+  pending `candidate_transform` JSON survive long runs.
+- Runtime README now documents this prompt-budget behavior.
+
+Why:
+
+- The loop already bounds retrieved knowledge and recent attempt history, but the final Anthropic
+  prompt had no hard last-mile budget. Long autonomous runs should degrade by compacting dynamic
+  evidence, not by silently constructing an oversized prompt or losing the newest repair signal.
+- This follows the same design direction as the repair/self-repair work: keep the latest tool
+  result and executable follow-up payload visible, while trimming older context first.
+
+Verification:
+
+- Focused prompt tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py::test_build_variation_prompt_compacts_dynamic_sections_with_tail_history tests/test_agent.py::test_build_variation_prompt_includes_repo_context tests/test_agent.py::test_build_variation_prompt_includes_attempt_history -q`:
+    passed, 3 tests.
+- Affected agent suite:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 200 tests.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 425 tests.
+
+Decision:
+
+- Keep prompt compaction section-based and deterministic. Do not add another agent, summarizer, or
+  learned memory layer until a concrete failure shows the simpler section budget is insufficient.
