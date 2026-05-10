@@ -11642,3 +11642,36 @@ Decision:
 
 - This is a repair-interface fix. A repair decision must now provide an explicit changed edit
   payload; the loop will not silently turn a repair retry into the same failed transform.
+
+## 2026-05-10 - Checkpoint 5.04: Consume pending transforms scored during repair
+
+Success criteria for this checkpoint:
+
+- Prevent a compile-only transform from remaining "pending" after it is scored inside an immediate
+  repair attempt.
+- Preserve the existing behavior where a plain planning failure after compile-only still keeps the
+  pending score follow-up alive.
+- Verify attempt-history validation does not force a stale no-edit score after repair scoring.
+
+Runtime fix:
+
+- Attempt-history pending-transform detection now treats score payloads inside `repair_attempts` as
+  real scores.
+- This prevents the next top-level planning call from asking to score a transform that already
+  failed correctness during the previous step's repair loop.
+- Added a regression test for the exact shape: compile-only transform, repair-attempt score failure,
+  then planning failure.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_drops_compile_followup_after_repair_score tests/test_evolve.py::test_summarize_attempt_history_requests_score_after_compile_only_transform tests/test_evolve.py::test_summarize_attempt_history_keeps_compile_followup_after_planning_failure tests/test_cli.py::test_repair_loop_does_not_autofill_pending_transform -q`: passed, 4 tests;
+  - `.venv/bin/ruff check avo/evolve.py tests/test_evolve.py avo/cli.py tests/test_cli.py`: passed;
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 376 tests.
+
+Decision:
+
+- The next live loop should not be nudged into rescoring the known-bad K async transform solely
+  because its failed score was nested under repair attempts.
