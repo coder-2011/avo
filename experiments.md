@@ -13807,3 +13807,56 @@ Decision:
   as planner/search feedback.
 - Do not add CUDA guards for this class. The correct response is orchestration classification and
   retry/budget behavior once Anthropic access is available again.
+
+## 2026-05-10 - Checkpoint 5.45: Accepted source manifests include local dependencies
+
+Sources checked:
+
+- OmniBOR specification, `https://github.com/omnibor/spec/blob/main/spec/SPEC.md`
+  - Useful pattern: input manifests list content identifiers for inputs used to build an artifact,
+    making dependency changes detectable.
+- GitHub npm provenance post, `https://github.blog/security/supply-chain-security/introducing-npm-package-provenance/`
+  - Useful pattern: provenance links an artifact back to source inputs and build context. For AVO,
+    lineage commits should carry enough source evidence to audit what a candidate score actually
+    came from.
+
+Change:
+
+- Runtime `avo/lineage.py` now writes `sources/latest/manifest.json` for accepted source snapshots.
+  The manifest records each source path, byte length, and SHA-256 hash.
+- Runtime `avo/evolve.py` now expands accepted candidate source snapshots through direct local
+  Python imports under `candidates/`, using Python `ast` parsing instead of executing imports.
+- Imported local package directories include source files under that package, so helper Python
+  modules and companion CUDA/C++ files can be captured when a scored wrapper imports them.
+- Existing unchanged-source gate ignores the generated manifest path when comparing latest source
+  snapshots, so adding the manifest does not by itself make an unchanged candidate look new.
+- README missing-work text now distinguishes this direct local import capture from still-missing
+  dynamic import/runtime-discovered dependency capture.
+
+Why:
+
+- AVO lineage commits are the durable memory of accepted candidates. If a scored Python wrapper
+  imports a helper outside the scored module and outside the usual companion source directory, the
+  previous snapshot could omit a real source input.
+- This stays conservative: only direct local imports inside `candidates/` are followed, no arbitrary
+  import execution occurs, and dynamic/runtime imports remain out of scope.
+
+Verification:
+
+- Focused source-artifact tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_finalize_attempt_snapshots_scored_candidate_sources_without_patch tests/test_evolve.py::test_finalize_attempt_snapshots_local_python_import_dependencies tests/test_lineage.py::test_commit_score_records_accepted_source_artifacts tests/test_lineage.py::test_commit_score_rejects_unchanged_source_rerun -q`:
+    passed, 4 tests.
+- Affected suites:
+  - `.venv/bin/python -m pytest tests/test_evolve.py tests/test_lineage.py -q`:
+    passed, 119 tests.
+- Hygiene:
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 422 tests.
+
+Decision:
+
+- Do not attempt a full Python dependency graph or dynamic import tracer yet. Static direct-local
+  import capture plus a content manifest is enough to close the current accepted-artifact audit gap
+  without making scoring slower or less deterministic.
