@@ -13353,3 +13353,47 @@ Decision:
   does not guarantee the planner's prose perfectly matches the materialized edit.
 - Treat transient CUDA availability and build-environment score failures as orchestration
   substrate failures, not correctness failures requiring CUDA source repair.
+
+## 2026-05-10 - Checkpoint 5.38: Source-verifiable load-claim validation fix
+
+Finding:
+
+- The semantic validator intended to catch claims like "reduce/reuse/hoist Q loads" had a Python
+  f-string bug: regex quantifiers were written as `{0,80}` inside an f-string, so the pattern
+  searched for the literal tuple-like text `(0, 80)` instead of a bounded wildcard.
+- Replaying step 1 from
+  `attempts/loop_after_source_verifiable_prompt_20260510T1550Z.json` confirmed the practical
+  impact: the planner claimed a Q-hoist out of `key_start`, but the materialized transform only
+  inserted `__syncthreads()` after Q loads that were already outside the `key_start` loop.
+
+Change:
+
+- Runtime `avo/agent.py` now escapes the regex quantifier and recognizes load-reduction wording
+  such as remove/move/relocate in addition to reduce/reuse/hoist.
+- Load-relocation validation now extracts named loop variables from claims such as "outside the
+  key_start loop" and requires the transform to actually move the operand load from before a
+  matching loop-header context to outside that named loop.
+- This is still a semantic source-verification check, not a phrase ban: a real Q-load hoist out
+  of `key_start` is accepted, while a sync-only transform with the same claim is rejected.
+
+Verification:
+
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q -k "q_load_hoist or q_hoist_claim or claimed_v_reuse or probability_load_hoist or current_q_reuse"`:
+    passed, 5 tests.
+- Replay check:
+  - Parsing the historical `mma_q_hoist_sync_v1` decision now raises
+    `candidate_transform semantic mismatch` for the Q-load reduction claim.
+- Affected suites and hygiene:
+  - `.venv/bin/python -m pytest tests/test_agent.py -q`: passed, 199 tests.
+  - `.venv/bin/python -m pytest tests/test_evolve.py -q`: passed, 91 tests.
+  - `.venv/bin/ruff check avo tests`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 411 tests.
+
+Decision:
+
+- Prefer this structural semantic check over adding another historical "do not repeat Q-hoist
+  sync" instruction. The planner can still make Q-load hoist attempts, but the transform must now
+  prove the claimed loop/dataflow movement in the source snippets.
