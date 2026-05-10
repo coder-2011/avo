@@ -11205,3 +11205,91 @@ Decision:
 - The better boundary is structural: reject edits that cannot be represented, violate known
   lifecycle/API invariants, or have no executable dataflow. Let weak but coherent CUDA hypotheses
   compile, fail, and self-repair.
+
+## 2026-05-10 - Checkpoint 4.96: Verify relaxed async-copy loop behavior
+
+Success criteria for this checkpoint:
+
+- Run a longer evolve-loop after removing the scalar BF16 async-copy hard preflight.
+- Confirm that async-copy attempts are routed through compile and compile-repair instead of being
+  blocked before compile.
+- Confirm that rejected candidates clean up their source edits and do not dirty the runtime repo.
+- Do not add a new phrase-level guard just because candidates fail correctness.
+
+Run:
+
+```bash
+timeout 14400 .venv/bin/python -m avo evolve-loop \
+  --lineage ./lineage \
+  --knowledge knowledge/ampere.md \
+  --cwd . \
+  --env-file ../avo/.env.local \
+  --timeout-s 2400 \
+  --max-steps 8 \
+  --compile-repair-attempts 4 \
+  --attempts-dir ./attempts \
+  --attempt-limit 24 \
+  --loop-json attempts/loop_relaxed_async_preflight_20260510T0317Z.json
+```
+
+Result:
+
+- Exit code `2`: no accepted candidate.
+- `completed_steps=8`, `stopped_reason=max_steps`.
+- No runtime source edits remained after cleanup.
+
+Step summary:
+
+- Step 1 compiled a repaired K double-buffer async-copy transform:
+  - `ok=true`;
+  - ptxas reported 40 registers, 1 barrier, and 18112 bytes shared memory;
+  - one compile-repair attempt preceded the successful compile.
+- Step 2 scored that transform:
+  - `all_correct=false`;
+  - geomean `0`;
+  - gate rejected it for correctness failure.
+- Step 3 compiled a repaired K async staging transform:
+  - `ok=true`;
+  - one compile-repair attempt preceded the successful compile.
+- Step 4 scored that transform:
+  - `all_correct=false`;
+  - geomean `0`;
+  - gate rejected it for correctness failure.
+- Step 5 compiled a repaired Q async-copy staging transform:
+  - `ok=true`;
+  - repair changed the inline PTX global pointer operand from a 32-bit `unsigned`
+    value to `unsigned long long` for the `l` constraint.
+- Step 6 scored that transform:
+  - `all_correct=false`;
+  - geomean `0`;
+  - gate rejected it for correctness failure.
+- Step 7 compiled another repaired K async-copy staging transform:
+  - `ok=true`;
+  - repair again fixed the `cp.async` global pointer operand width.
+- Step 8 scored that transform:
+  - `all_correct=false`;
+  - geomean `0`;
+  - score cases reported CUDA unknown/misaligned-address errors;
+  - gate rejected it for correctness failure.
+
+What this proved:
+
+- The relaxed async-copy granularity boundary is working as intended. The planner generated async
+  hypotheses, the materializer applied them, compile errors were repaired inside the agent loop, and
+  scoring rejected bad runtime behavior without human intervention.
+- The old scalar async-copy hard preflight would have blocked parts of this search before compile.
+  Letting the candidates reach compile exposed more useful concrete failures, especially the
+  64-bit pointer operand requirement for inline PTX `cp.async`.
+- The next issue is not another ban list. These async candidates are semantically weak: they stage
+  K or Q with barriers/commit/wait patterns that compile but do not preserve a correct initialized
+  dataflow. The search loop should use the correctness failures as attempt history and move toward
+  better staging semantics, not add a new hard rule for every misaligned-address variant.
+
+Decision:
+
+- Keep the relaxed preflight.
+- Record the loop as evidence that compile self-repair is functioning for concrete CUDA compile
+  errors.
+- Do not promote these correctness failures to a hard preflight yet; the repeated class is broad
+  (`correctness_failed` / runtime misaligned address) and needs a better semantic transform family,
+  not another phrase-specific rejection.
