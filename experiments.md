@@ -11838,3 +11838,48 @@ Decision:
   but far slower, or layout repairs fail correctness.
 - Future K work should be part of a broader pipeline/dataflow change, not another isolated
   cooperative K staging variant.
+
+## 2026-05-10 - Checkpoint 5.08: Add semantic-family memory for repeated CUDA moves
+
+Success criteria for this checkpoint:
+
+- Help the planner stop repeating the same broad CUDA optimization family after repeated
+  unaccepted attempts.
+- Keep the signal advisory instead of creating another hard ban or exact phrase filter.
+- Classify the actual attempted edit, not historical rationale text, so old failure descriptions do
+  not contaminate the family label.
+
+Runtime fix:
+
+- Attempt summaries now include a `family=...` label alongside the failure class.
+- Recent unaccepted attempts are scanned for recurring transform families such as
+  `shared_memory_staging`, `async_copy_pipeline`, `register_reuse`, WMMA contract/tile-shape
+  changes, online-softmax/rescale changes, and scheduler/unroll changes.
+- When one family repeats over the unaccepted tail, the summary emits a soft
+  `Semantic-family signal` telling the planner to choose a materially different optimization
+  family unless the next transform changes the dataflow, pipeline overlap, or validation contract.
+- The classifier uses concrete edit payloads: `candidate_edit`, `candidate_transform`,
+  `candidate_patch`, and the materialized patch. It deliberately avoids broad hypothesis/risk text
+  because those often mention prior failed ideas.
+
+Verification:
+
+- Real attempt-history sanity check over the latest 12 attempts:
+  - shared-memory staging attempts are labeled `family=shared_memory_staging`;
+  - async-copy appears only where the actual edit or repair used async-copy machinery;
+  - the emitted signal is `shared_memory_staging(count=11)`.
+- Focused tests:
+  - `.venv/bin/python -m pytest tests/test_evolve.py::test_summarize_attempt_history_flags_recurring_transform_family tests/test_evolve.py::test_summarize_attempt_history_flags_repeated_unaccepted_attempts tests/test_evolve.py::test_summarize_attempt_history_counts_mixed_recurring_failure_classes tests/test_evolve.py::test_summarize_attempt_history_includes_repair_attempt_failures -q`: passed, 4 tests.
+- Lint and patch hygiene:
+  - `.venv/bin/ruff check avo/evolve.py tests/test_evolve.py`: passed.
+  - `git diff --check`: passed.
+- Full runtime suite:
+  - `.venv/bin/python -m pytest -q`: passed, 378 tests.
+
+Decision:
+
+- This addresses the root issue better than adding another guard: the planner now sees repeated
+  failed semantic families and should move to a different coherent CUDA optimization move.
+- The mechanism is still intentionally soft. It should steer search away from repeated standalone
+  shared-memory staging without forbidding future shared-memory work that is part of a different
+  dataflow or pipeline design.
