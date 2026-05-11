@@ -15983,3 +15983,43 @@ Verification:
 Decision:
 
 - Restart the long OpenRouter loop after committing and pushing this loop-control checkpoint.
+
+## 2026-05-11 - Checkpoint 5.88: Add start/end anchored block transform
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.87.
+- The loop continued to spend attempts on invalid transform shapes. One failure was useful:
+  the planner emitted a block edit with `find_start` and `find_end`, which expressed a coherent
+  source-region replacement but was not supported by the transform API.
+
+Change:
+
+- Added `replace_between_once` to `candidate_transform`.
+- The new op uses:
+  - `find_start`: a unique inclusive start anchor,
+  - `find_end`: a unique inclusive end anchor,
+  - `replace`: the replacement text for that anchored region.
+- Added parser/schema support, prompt/repo-context guidance, materialization support, and tests.
+
+Why:
+
+- This addresses the earlier interface critique directly: a scoped semantic edit can be reviewable
+  and recoverable without requiring the planner to reproduce a large exact `find` block.
+- Start/end anchored replacement is a small coherent transformation primitive, not a raw CUDA diff.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_accepts_replace_between_transform tests/test_agent.py::test_decision_tool_uses_strict_schema tests/test_evolve.py::test_materialize_candidate_transform_replaces_between_anchors tests/test_agent.py::test_parse_variation_decision_infers_missing_transform_path_from_single_file -q`:
+    passed, 4 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 376
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop after committing and pushing this transform-interface extension.
