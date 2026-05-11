@@ -15655,3 +15655,58 @@ Decision:
 - Keep provider/API failures as stop conditions for the live Anthropic loop. They are external
   execution blockers, not CUDA search evidence, so repeating the loop without credits cannot improve
   the kernel.
+
+## 2026-05-11 - Checkpoint 5.81: Make TFLOP accounting auditable in score metadata
+
+Sources checked:
+
+- Exa fetch, FlashAttention benchmark source,
+  `https://github.com/Dao-AILab/flash-attention/blob/3387de49/benchmarks/benchmark_flash_attention.py`
+  - Useful fact: the upstream benchmark helper counts forward attention as
+    `4 * batch * seqlen**2 * nheads * headdim`, divided by 2 for causal cases.
+- Exa fetch, FlashAttention paper,
+  `https://arxiv.org/pdf/2205.14135`
+  - Useful fact: the paper frames exact attention performance around the QK, softmax, and PV
+    computation while emphasizing IO/memory movement as the key bottleneck; TFLOP/s alone is not a
+    complete performance explanation.
+
+Change:
+
+- Kept the runtime's existing FlashAttention-compatible FLOP convention instead of switching to an
+  exact triangular causal-pair count, because the project baseline is FlashAttention-2 and lineage
+  comparisons should remain convention-compatible with upstream FA benchmarking.
+- Added explicit `flop_accounting` metadata to every benchmark summary:
+  - name: `flash_attention_forward_compatible`
+  - formula: `4 * batch_size * num_heads * seq_len**2 * head_dim // (2 if causal else 1)`
+  - scope: forward QK and PV matmul FLOPs only; excludes softmax, masking, and projections
+  - causal convention: `half_dense`
+- Updated README scoring docs and the benchmark metadata unit test.
+
+Why:
+
+- Accurate TFLOP measurement is one of the core engineering requirements, but "accurate" has two
+  parts here: computing consistently and making the convention visible. The previous numbers were
+  consistent with the common FlashAttention convention, but the convention was implicit in code and
+  absent from lineage JSON.
+- Making the convention auditable avoids confusing future candidate comparisons, especially if a
+  later analysis chooses to report exact causal triangular work or IO-derived metrics alongside
+  FlashAttention-compatible TFLOP/s.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_benchmark_math.py -q`: passed, 7 tests.
+- Affected:
+  - `uv run pytest tests/test_benchmark_math.py tests/test_lineage.py tests/test_cli.py -q`:
+    passed, 80 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 472 tests.
+
+Decision:
+
+- Keep FA-compatible TFLOP/s as the primary score metric for baseline comparability, and rely on the
+  new metadata to make that choice explicit. If the search loop starts making IO-oriented tradeoffs,
+  add separate IO/traffic diagnostics rather than silently changing the headline TFLOP convention.
