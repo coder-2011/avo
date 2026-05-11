@@ -16023,3 +16023,39 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop after committing and pushing this transform-interface extension.
+
+## 2026-05-11 - Checkpoint 5.89: Normalize no-edit diagnostic prose
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.88.
+- The next completed step failed validation because a no-edit diagnostic had `edit_mode="no_edit"`
+  and no edit payload, but `candidate_edit` did not start with the exact `No edit;` prefix.
+
+Change:
+
+- Normalize explicit no-edit decisions with no edit payload by adding the `No edit;` prefix when
+  it is missing.
+
+Why:
+
+- The prefix is bookkeeping for the orchestrator, not a CUDA invariant. Rejecting an otherwise
+  bounded no-edit diagnostic over this wording wastes planner retries and loop steps.
+- Edit/no-edit safety is still enforced by the absence of edit payload and by command/history
+  validators.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_normalizes_no_edit_prefix tests/test_agent.py::test_parse_variation_decision_accepts_replace_between_transform tests/test_evolve.py::test_materialize_candidate_transform_replaces_between_anchors -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 377
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop after this small normalizer is committed and pushed.
