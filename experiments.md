@@ -15378,3 +15378,57 @@ Decision:
 
 - Keep the new command as an audit surface only. It does not alter acceptance, scoring, baseline
   seeding, or agent planning.
+
+## 2026-05-11 - Checkpoint 5.76: Verify candidate hard-crash containment
+
+External sources checked:
+
+- Exa result, PyInstaller isolation subprocess crash test,
+  `https://github.com/pyinstaller/pyinstaller/blob/243d0279/tests/unit/test_isolation.py`
+  - Useful fact: isolation layers should test child-process death explicitly, not only ordinary
+    Python exceptions.
+- Exa result, CPython ProcessPoolExecutor crash diagnostics issue,
+  `https://github.com/python/cpython/issues/139462`
+  - Useful fact: when a worker process terminates abruptly, preserving the child exit code is useful
+    crash evidence for the parent/supervisor.
+- Exa result, pytest-subprocess docs,
+  `https://pytest-subprocess.readthedocs.io/en/stable`
+  - Useful fact: subprocess behavior is often faked in unit tests, but here an actual child-process
+    exit test is the stronger regression because the AVO risk is a real worker crash.
+
+Change:
+
+- Added a score-command regression test where a candidate module exits the worker process with
+  code `139` during import.
+- Tightened the runtime README wording:
+  - Python exceptions and import failures become failed score records.
+  - Hard worker exits such as segfaults or process aborts are contained as failed isolated command
+    records with the child return code, instead of crashing the orchestrator.
+
+Why:
+
+- `tests/test_isolation.py` already covered a generic child-process crash, but not the actual
+  `avo score --backend candidate` path. The architecture requirement is specifically that bad
+  candidate kernels/candidate modules cannot take down the orchestrator.
+- The previous README wording implied all crashes become failed score payloads. That is true for
+  Python exceptions inside `score_backend`, but not for a hard process exit before the worker prints
+  `AVO_RESULT_JSON`. The parent still contains it correctly, but as an isolated command failure.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_cli.py::test_score_command_contains_hard_candidate_crash tests/test_isolation.py -q`:
+    passed, 4 tests.
+- Affected:
+  - `uv run pytest tests/test_cli.py tests/test_isolation.py -q`: passed, 53 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 464 tests.
+
+Decision:
+
+- No runtime code change was needed. The implementation already contains hard worker exits through
+  `run_json_worker`; the checkpoint adds coverage on the real score path and corrects the documented
+  failure contract.
