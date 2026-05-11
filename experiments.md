@@ -15209,3 +15209,65 @@ Decision:
 
 - Treat `candidate_path` as the minimum source-location context for score-time compile repairs.
   Runtime-discovered helper files remain additive evidence, not a prerequisite for repair.
+
+## 2026-05-10 - Checkpoint 5.73: Add no-call Anthropic agent status command
+
+External sources checked:
+
+- Exa result, Harness CLI `harness check`,
+  `https://www.mintlify.com/ayshptk/harness-cli/cli/check`
+  - Useful fact: agent harnesses commonly expose a diagnostic check that reports agent/tool
+    availability, versions, and API-key environment status without running a task.
+- Exa result, Harness CLI agents concept,
+  `https://mintlify.com/ayshptk/harness-cli/concepts/agents`
+  - Useful fact: Claude/Anthropic-backed agents conventionally key off `ANTHROPIC_API_KEY`, and
+    agent selection/setup should be explicit.
+
+Change:
+
+- Added `avo agent-status --env-file PATH`.
+- The command prints the existing Anthropic status block as JSON: SDK import status, SDK version
+  when available, env-file path/load status, and whether `ANTHROPIC_API_KEY` is present.
+- The command does not print the secret and does not call Anthropic.
+- README examples for `agent-plan`, `evolve-once`, and `evolve-loop` now pass
+  `--env-file ../avo/.env.local`.
+- Ampere knowledge, retrieval claims, and retrieval tests now index the no-call credential
+  preflight.
+
+Why:
+
+- Live AVO planning depends on Anthropic credentials, but `avo env` mixes that check with CUDA and
+  FA2 build diagnostics. A narrow agent-status command separates local credential/setup failures
+  from provider/API failures before starting an expensive loop.
+- This also makes it easier to confirm the lab env file is loaded without spending provider
+  credits or leaking `ANTHROPIC_API_KEY`.
+
+Provider status:
+
+- `uv run python -m avo agent-status --env-file /home/ubuntu/avo/.env.local` reported
+  `anthropic_api_key_present=true` and `env_file_loaded=true` without printing the secret.
+- No Anthropic planner call was made for this checkpoint. Anthropic live loops remain blocked by
+  the low-credit error recorded in Checkpoint 5.65 until provider quota is restored.
+
+Verification:
+
+- Focused suites:
+  - `uv run pytest tests/test_cli.py::test_agent_status_command_prints_json_without_secret tests/test_cli.py::test_agent_status_loads_env_file_without_printing_value tests/test_cli.py::test_agent_status_reports_missing_key_without_secret tests/test_knowledge.py -q`:
+    passed, 59 tests.
+- Affected suites:
+  - `uv run pytest tests/test_cli.py tests/test_knowledge.py -q`: passed, 104 tests.
+- Command checks:
+  - `uv run python -m avo agent-status --env-file /home/ubuntu/avo/.env.local`: passed and did
+    not print the API key value.
+  - `uv run python -m avo --help` and `uv run python -m avo agent-status --help`: exposed the new
+    command and `--env-file`.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 462 tests.
+
+Decision:
+
+- Keep `agent-status` as a local setup preflight only. It should not call the provider, validate
+  account credits, or replace the score/compile environment checks in `avo env`.
