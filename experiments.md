@@ -15535,3 +15535,62 @@ Decision:
 
 - A hard worker crash caused by an applied edit is repairable once inside the bounded edit-repair
   loop. Repeated `worker_crash` still must not promote to a hard preflight track by recurrence alone.
+
+## 2026-05-11 - Checkpoint 5.79: Keep baseline-seeded lineage on target benchmark signature
+
+Sources checked:
+
+- Local `arch.md`: the scoring function is the target vector over sequence lengths
+  `{4096, 8192, 16384, 32768}` with fixed total tokens `32768`, BF16 head dimension 128, and both
+  causal modes.
+- Exa result, FlashAttention-2 ICLR 2024 abstract,
+  `https://proceedings.iclr.cc/paper_files/paper/2024/hash/98ed250b203d1ac6b24bbcf263e3d4a7-Abstract-Conference.html`
+  - Useful fact: FlashAttention-2 is explicitly motivated by long-sequence attention bottlenecks and
+    improves work partitioning to reduce low occupancy and shared-memory traffic.
+- Exa result, FlashAttention-2 PDF,
+  `https://tridao.me/publications/flash2/flash2.pdf`
+  - Useful fact: the FA2 paper benchmarks long sequence attention with head dimensions 64/128 and
+    controls total token count by adjusting batch size. This supports treating the AVO target suite
+    as the committed progress signature rather than letting toy smoke shapes become progress lanes.
+
+Change:
+
+- Tightened `commit_score`: after a FlashAttention baseline is seeded, a candidate score must match
+  the baseline benchmark case signature to be accepted into lineage.
+- Smoke or shape-diagnostic scores can still run and provide attempt-memory feedback, but they now
+  reject at the gate instead of creating a new accepted progress lane once the baseline exists.
+- Classified this rejection in attempt summaries as `benchmark_signature_mismatch` instead of a
+  generic throughput regression.
+- Updated planner repo context and README wording so the agent sees the same contract: smoke scores
+  are repair/correctness feedback, not evolutionary progress after baseline seeding.
+
+Why:
+
+- Earlier shape-graduation lanes were useful while the candidate learned to cover larger shapes, but
+  the runtime now has an FA2 baseline and accepted source coverage through `seq32768`.
+- Continuing to let edited candidates establish new smoke-only lanes would pull the search back
+  toward unrealistic workloads and make the committed lineage look like progress when it is only
+  auxiliary validation.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_lineage.py::test_baseline_rejects_candidate_with_different_benchmark_signature tests/test_lineage.py::test_baseline_does_not_block_candidate_lineage_progress tests/test_lineage.py::test_commit_score_accepts_new_benchmark_shape_lane -q`:
+    passed, 3 tests.
+  - `uv run pytest tests/test_evolve.py::test_summarize_attempt_history_classifies_benchmark_signature_mismatch -q`:
+    passed, 1 test.
+  - `uv run pytest tests/test_agent.py::test_build_repo_context_lists_local_candidates -q`:
+    passed, 1 test.
+- Affected:
+  - `uv run pytest tests/test_lineage.py tests/test_evolve.py tests/test_agent.py tests/test_cli.py -q`:
+    passed, 383 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 471 tests.
+
+Decision:
+
+- Keep smoke scores executable because they are still useful diagnostics, especially for repairs.
+  The committed candidate lineage, once FA2 is seeded, must stay on the target benchmark signature.
