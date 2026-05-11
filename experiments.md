@@ -15480,3 +15480,58 @@ Decision:
 
 - Keep `worker_crash` non-promotable. It is a high-signal attempt-memory class, not a sufficient
   structural preflight rule by itself.
+
+## 2026-05-11 - Checkpoint 5.78: Repair edit-caused worker crashes immediately
+
+Sources checked:
+
+- Local `paper.md`: AVO should be a self-directed agent loop that uses execution feedback to
+  propose, repair, critique, and verify implementation edits.
+- Local `arch.md`: failed candidates stay in agent working memory, and the Level 1 loop is
+  edit-compile-eval-diagnose with the agent adapting based on compiler output, profiler feedback,
+  and correctness diagnostics.
+- Exa result, SWE-agent NeurIPS paper,
+  `https://papers.nips.cc/paper_files/paper/2024/file/5a7c947568c1b1328ccc5230172e1e7c-Paper-Conference.pdf`
+  - Useful fact: agent-computer interface design matters for software agents; informative prompts,
+    error messages, and test/program execution feedback are part of making agents able to revise
+    code instead of relying on a single generation.
+
+Change:
+
+- Added `attempt_has_repairable_worker_crash` so a hard worker exit tied to an applied edit is
+  treated as a repairable edit failure.
+- Routed repairable worker crashes into the bounded immediate repair loop after cleanup reverts the
+  failed edit.
+- Added a worker-crash repair prompt that includes the failed command, return code, stdout/stderr
+  crash evidence, and failed edit payload, while requiring a revised executable edit instead of a
+  no-edit retry.
+- Documented in the runtime README that isolated worker crashes from applied edits enter immediate
+  repair.
+
+Why:
+
+- The previous checkpoint made `worker_crash` visible in attempt memory but still left crash repair
+  to a later planner cycle. That was only a partial answer to the requirement that agents fix their
+  own failed attempts.
+- This keeps the class non-promotable as a hard preflight, but still lets the active variation step
+  perform the AVO-style repair loop while the crash context is fresh.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_evolve.py::test_worker_crash_with_edit_is_repairable tests/test_evolve.py::test_worker_crash_without_edit_is_not_repairable tests/test_evolve.py::test_summarize_attempt_history_classifies_worker_crash -q`:
+    passed, 3 tests.
+  - `uv run pytest tests/test_cli.py::test_evolve_once_repairs_candidate_worker_crash_before_finishing -q`:
+    passed, 1 test.
+- Affected:
+  - `uv run pytest tests/test_evolve.py tests/test_cli.py -q`: passed, 159 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 469 tests.
+
+Decision:
+
+- A hard worker crash caused by an applied edit is repairable once inside the bounded edit-repair
+  loop. Repeated `worker_crash` still must not promote to a hard preflight track by recurrence alone.
