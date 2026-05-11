@@ -15432,3 +15432,51 @@ Decision:
 - No runtime code change was needed. The implementation already contains hard worker exits through
   `run_json_worker`; the checkpoint adds coverage on the real score path and corrects the documented
   failure contract.
+
+## 2026-05-11 - Checkpoint 5.77: Classify hard worker crashes in attempt memory
+
+External source checked:
+
+- Exa result, Python subprocess documentation,
+  `https://docs.python.org/3/library/subprocess.html`
+  - Useful fact: `subprocess` reports POSIX signal deaths as negative return codes when the direct
+    child is observed; shell-mediated exits may surface signal deaths as `128 + signal`.
+
+Change:
+
+- Classified hard score/worker child exits as `worker_crash` in attempt summaries before they fall
+  through to generic command failure.
+- Added a summary regression for return code `139` so the recent-attempt memory exposes
+  `class=worker_crash` and preserves the concrete return code.
+- Added a recurrence regression proving repeated `worker_crash` attempts do not write a promoted
+  hard preflight track.
+- Updated the runtime README to document that hard worker exits are planner/supervisor feedback, not
+  automatic hard preflight material.
+
+Why:
+
+- A hard child-process exit is materially different from an ordinary command failure. It should give
+  the planner and supervisor useful repair context without turning every crash recurrence into
+  another static ban.
+- This keeps the failure loop pointed toward self-repair: classify the failed attempt, feed the class
+  back into planning, and reserve hard preflight promotion for concrete structural invariants.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_evolve.py::test_summarize_attempt_history_classifies_worker_crash tests/test_evolve.py::test_summarize_attempt_history_reports_recent_steps -q`:
+    passed, 2 tests.
+  - `uv run pytest tests/test_evolve.py::test_summarize_attempt_history_classifies_worker_crash tests/test_evolve.py::test_worker_crashes_are_not_promoted_to_hard_preflight tests/test_evolve.py::test_async_copy_compile_errors_are_not_promoted_to_hard_preflight -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_evolve.py -q`: passed, 106 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 466 tests.
+
+Decision:
+
+- Keep `worker_crash` non-promotable. It is a high-signal attempt-memory class, not a sufficient
+  structural preflight rule by itself.
