@@ -15774,3 +15774,45 @@ Decision:
   file; do not write user-provided keys into tracked files or logs.
 - Start the requested long loop only after this provider-port checkpoint is committed and pushed, so
   any candidate accepted by the loop is based on committed orchestrator code.
+
+## 2026-05-11 - Checkpoint 5.83: Surface OpenRouter error payloads during planning
+
+Attempted live loop:
+
+- Started:
+  `uv run python -m avo evolve-loop --provider openrouter --model anthropic/claude-opus-4.7 --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 80 --max-wall-time-s 21600 --timeout-s 360 --compile-repair-attempts 2 --loop-json attempts/openrouter-long-loop.json`
+- Result: stopped after one planning step with `planner_provider_error`.
+- Failure detail: `OpenRouter response missing choices`.
+
+Change:
+
+- Fixed the OpenRouter response boundary to detect a top-level provider `error` payload even when the
+  HTTP call itself returns parseable JSON.
+- Such payloads now raise `OpenRouterAPIError` with the provider message instead of falling through
+  to a misleading missing-choices validation error.
+- Kept the schema-wrapper fallback path: if OpenRouter rejects the JSON-schema response format with a
+  400/422-style error, the planner retries once with JSON-object response format.
+
+Why:
+
+- Long-loop supervision needs accurate provider/error classification. A provider rejection is not a
+  malformed planner decision and should not be treated as CUDA search evidence.
+- The first live OpenRouter run showed that the response handler needed to classify provider error
+  JSON before trying to read `choices`.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_openrouter_response_falls_back_to_json_object_on_schema_rejection tests/test_agent.py::test_openrouter_message_text_surfaces_error_payload tests/test_agent.py::test_request_variation_decision_uses_openrouter_provider -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 368
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Re-run the requested long OpenRouter loop after committing and pushing this provider-response
+  boundary fix.
