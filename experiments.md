@@ -16101,3 +16101,38 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop after committing and pushing this planner-retry boundary fix.
+
+## 2026-05-11 - Checkpoint 5.91: Infer transform path from compile source
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.90.
+- A planner response still failed parser validation because a batch transform step omitted `path`.
+
+Change:
+
+- Extended candidate-transform path defaulting to use `next_command --source` as a fallback when
+  `files_to_inspect` does not provide exactly one candidate source path.
+- This lets pathless batch steps inherit the compile source path when the planner clearly intends to
+  compile that source.
+
+Why:
+
+- A compile command with one `--source` is an unambiguous path signal. Rejecting a pathless transform
+  batch in that case is another avoidable planner-interface failure.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_infers_batch_path_from_compile_source tests/test_agent.py::test_parse_variation_decision_infers_missing_transform_path_from_single_file tests/test_agent.py::test_parse_variation_decision_accepts_replace_between_transform -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 379
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop after committing and pushing this path-defaulting fix.
