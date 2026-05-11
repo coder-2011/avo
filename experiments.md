@@ -15944,3 +15944,42 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop on the pushed follow-up fix.
+
+## 2026-05-11 - Checkpoint 5.87: Prioritize pending compile-only transform scoring
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.86.
+- The loop made progress but still spent planner steps on recoverable control issues:
+  - a structured transform omitted its operation `path`,
+  - a planner decision repeated a successful compile-only transform instead of scoring it.
+
+Change:
+
+- `VariationDecision` now infers a missing structured-transform `path` from a single
+  `files_to_inspect` candidate source path.
+- `evolve-loop` now checks for a pending successful compile-only transform before each planner step
+  and scores that transform directly instead of asking the planner what to do next.
+
+Why:
+
+- Missing `path` is recoverable when the decision identifies exactly one candidate file.
+- A successful compile-only transform is a known control obligation. The loop should score it
+  immediately; routing that obligation back through a general planner creates avoidable invalid
+  decisions and burns provider calls.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_infers_missing_transform_path_from_single_file tests/test_cli.py::test_evolve_loop_scores_pending_compile_transform_before_planning tests/test_cli.py::test_evolve_loop_scores_pending_compile_transform_at_step_limit -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 374
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the long OpenRouter loop after committing and pushing this loop-control checkpoint.
