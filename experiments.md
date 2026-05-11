@@ -15816,3 +15816,44 @@ Decision:
 
 - Re-run the requested long OpenRouter loop after committing and pushing this provider-response
   boundary fix.
+
+## 2026-05-11 - Checkpoint 5.84: Bound OpenRouter body reads before long loop restart
+
+Attempted live loop:
+
+- Started:
+  `uv run python -m avo evolve-loop --provider openrouter --model anthropic/claude-opus-4.7 --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --max-steps 80 --max-wall-time-s 21600 --timeout-s 360 --compile-repair-attempts 2 --loop-json attempts/openrouter-long-loop-2.json`
+- Result: interrupted before step 1 after the first planner call remained nonproductive for about
+  twenty minutes.
+- Stack trace showed OpenRouter had returned headers and the client was blocked in
+  `response.read()` while reading a chunked body.
+
+Change:
+
+- Added a whole-request OpenRouter deadline around `urlopen()` and response body read.
+- Local OpenRouter timeouts now become `OpenRouterAPIError` with status 408, which the planner
+  retry loop treats as transient.
+- Added a regression test for a stalled OpenRouter response body read.
+
+Why:
+
+- Socket timeouts alone were not enough once the provider returned headers and kept the chunked body
+  open. That could consume the entire long evolve run before recording a single attempt.
+- The loop should either get a planner decision or classify/retry a provider timeout; it should not
+  silently park before CUDA search begins.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_openrouter_response_falls_back_to_json_object_on_schema_rejection tests/test_agent.py::test_openrouter_message_text_surfaces_error_payload tests/test_agent.py::test_openrouter_chat_completion_maps_body_read_timeout tests/test_agent.py::test_request_variation_decision_uses_openrouter_provider -q`:
+    passed, 4 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 369
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the requested long loop after this timeout-boundary fix is committed and pushed.
