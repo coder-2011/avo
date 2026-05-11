@@ -16136,3 +16136,38 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop after committing and pushing this path-defaulting fix.
+
+## 2026-05-11 - Checkpoint 5.92: Normalize transform target_path alias
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.91.
+- The loop produced several valid compile/score candidates, then one planner response failed parser
+  validation because it used `target_path` instead of `path` inside a candidate transform.
+
+Change:
+
+- Normalize `target_path` to `path` in candidate transforms, including nested batch steps.
+
+Why:
+
+- `target_path` is an obvious alias for `path`; rejecting it is an interface-shape failure, not a
+  CUDA safety check.
+- This keeps the transform interface scoped and structured while making it less brittle for model
+  JSON variants.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_normalizes_target_path_alias tests/test_agent.py::test_parse_variation_decision_infers_batch_path_from_compile_source tests/test_agent.py::test_parse_variation_decision_accepts_replace_between_transform -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 380
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop after committing and pushing this alias normalizer.
