@@ -16204,3 +16204,41 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop after committing and pushing this alias normalizer.
+
+## 2026-05-11 - Checkpoint 5.94: Recognize global-to-shared WMMA load relocation
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.93.
+- The planner repeatedly proposed K/V shared-memory staging. The semantic guard rejected those
+  plans because the number of WMMA load sites stayed constant, even when the source moved from a
+  global pointer (`k + ...` / `v + ...`) to a shared tile (`k_tile` / `v_tile`).
+
+Change:
+
+- Extended the load-reduction semantic check to treat WMMA operand loads that move from global
+  memory pointers to shared tile/shared buffers as source-verifiable load relocation.
+
+Why:
+
+- For shared staging, the WMMA instruction count can remain the same while the memory source changes
+  from global to shared. Counting load sites alone was too strict and blocked a real semantic move.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_allows_v_global_to_shared_load_relocation tests/test_agent.py::test_parse_variation_decision_rejects_claimed_v_reuse_without_v_load_change tests/test_agent.py::test_parse_variation_decision_allows_q_load_hoist_out_of_named_loop -q`:
+    passed, 3 tests.
+  - After formatting fix:
+    `uv run pytest tests/test_agent.py::test_parse_variation_decision_allows_v_global_to_shared_load_relocation -q`:
+    passed, 1 test.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 382
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop after committing and pushing this semantic-check fix.
