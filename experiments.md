@@ -16059,3 +16059,45 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop after this small normalizer is committed and pushed.
+
+## 2026-05-11 - Checkpoint 5.90: Retry planner decisions on attempt-history validation
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.89.
+- The loop again recorded a failed step for an attempt-history violation: the planner repeated a
+  candidate transform that was already known from prior attempts.
+
+Change:
+
+- Added a planner-history validation retry around normal planning decisions.
+- If `validate_decision_against_attempt_history()` rejects a planner decision, the error is appended
+  to the planner attempt-history context and the planner is asked for a corrected decision before an
+  evolve step is recorded.
+
+Why:
+
+- Parser/schema retries were already internal to the planner call, but history validation happened
+  after the call and burned full loop steps. This was exactly the wrong failure boundary for
+  repeated transform families.
+- The agent should repair its own invalid planning decision when the orchestrator can state the
+  history constraint concretely.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_cli.py::test_evolve_loop_retries_history_invalid_planner_decision tests/test_agent.py::test_parse_variation_decision_normalizes_no_edit_prefix tests/test_agent.py::test_parse_variation_decision_accepts_replace_between_transform tests/test_evolve.py::test_materialize_candidate_transform_replaces_between_anchors -q`:
+    passed, 4 tests.
+  - After formatting fix:
+    `uv run pytest tests/test_cli.py::test_evolve_loop_retries_history_invalid_planner_decision -q`:
+    passed, 1 test.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 378
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop after committing and pushing this planner-retry boundary fix.
