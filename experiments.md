@@ -15594,3 +15594,64 @@ Decision:
 
 - Keep smoke scores executable because they are still useful diagnostics, especially for repairs.
   The committed candidate lineage, once FA2 is seeded, must stay on the target benchmark signature.
+
+## 2026-05-11 - Checkpoint 5.80: Always ground planner context in broad CUDA knowledge
+
+Sources checked:
+
+- Exa result, NVIDIA CUDA C++ Programming Guide, Pipelines,
+  `https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/pipelines.html`
+  - Useful fact: CUDA pipelines coordinate staged producer/consumer work; wait-prior behavior is
+    tied to committed stages, so wait/commit ordering is a real lifecycle invariant rather than a
+    stylistic preference.
+- Exa result, NVIDIA Ampere Tuning Guide,
+  `https://docs.nvidia.com/cuda/ampere-tuning-guide/`
+  - Useful fact: Ampere exposes hardware-accelerated global-to-shared async copies through CUDA
+    pipeline APIs, and sm86 has 100 KB shared memory per SM plus explicit sm86 compilation benefits.
+
+Attempted live loop:
+
+- Ran:
+  `uv run python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --attempts-dir ./attempts --env-file ../avo/.env.local --max-steps 4 --max-wall-time-s 3600 --timeout-s 240 --compile-repair-attempts 2 --loop-json attempts/latest-loop.json`
+- Result: stopped after one planning step with `planner_provider_error` because Anthropic returned
+  low credit balance before producing a candidate. No CUDA candidate command ran.
+- Current full-suite lineage gap before the blocked loop: candidate geometric mean about
+  9.59 TFLOPS versus FlashAttention-2 about 109.83 TFLOPS on the target signature.
+
+Change:
+
+- Updated runtime planner context assembly so broad CUDA grounding is guaranteed when the dynamic
+  retriever query misses it.
+- The planner now appends bounded fallback chunks from both `knowledge/b/cuda_general.md` and
+  `knowledge/b/cuda_programming_practice.md`, checked against the original retrieved context so one
+  supplement cannot accidentally suppress the other.
+- Updated README to document the fallback behavior.
+
+Why:
+
+- The user asked for general CUDA knowledge and for the agent to reason about CUDA practice, not just
+  memorize local failure phrases. The broad files contain execution model, memory hierarchy,
+  synchronization, profiling, and semantic-transform workflow grounding; they should reliably reach
+  the planner even when the current attempt-history query is dominated by local Ampere failures.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_cli.py::test_planning_context_includes_general_cuda_context tests/test_cli.py::test_general_cuda_context_supplements_missing_broad_files tests/test_knowledge.py -q`:
+    passed, 58 tests.
+- Affected:
+  - `uv run pytest tests/test_cli.py tests/test_knowledge.py -q`: passed, 108 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in both runtime and lab repos.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 472 tests.
+- Retrieval smoke:
+  - `uv run python -m avo knowledge-search knowledge/ampere.md --query "General CUDA Working Knowledge Execution Model Memory Spaces CUDA Kernel Design Practice semantic transformation" --max-chunks 6 --max-chars 10000`
+    retrieved chunks from both `b/cuda_general.md` and `b/cuda_programming_practice.md`.
+
+Decision:
+
+- Keep provider/API failures as stop conditions for the live Anthropic loop. They are external
+  execution blockers, not CUDA search evidence, so repeating the loop without credits cannot improve
+  the kernel.
