@@ -15905,3 +15905,42 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop after this planner-boundary fix is committed and pushed.
+
+## 2026-05-11 - Checkpoint 5.86: Default missing descriptive planner fields
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.85.
+- The next completed planner step still failed validation after three retries because the provider
+  omitted `hypothesis`.
+
+Change:
+
+- Extended the planner-boundary defaulting to cover descriptive fields:
+  - missing `candidate_edit` defaults to a transform-oriented edit description when an edit payload
+    exists, otherwise to a no-edit diagnostic description,
+  - missing `hypothesis` defaults from `candidate_edit`, the `avo` subcommand, or a conservative
+    generic AVO step.
+
+Why:
+
+- OpenRouter can return partially shaped JSON even when asked for a schema-shaped decision. The
+  orchestrator should require executable semantics (`next_command`, edit/no-edit consistency, patch
+  preflight, compile/score guards), but it should not spend whole evolve steps rejecting missing
+  prose fields that can be safely reconstructed.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_defaults_missing_descriptive_fields tests/test_agent.py::test_parse_variation_decision_defaults_missing_nonsemantic_metadata tests/test_agent.py::test_parse_variation_decision_allows_transform_score_with_profiler_wording -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 372
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop on the pushed follow-up fix.
