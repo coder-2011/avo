@@ -16242,3 +16242,43 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop after committing and pushing this semantic-check fix.
+
+## 2026-05-11 - Checkpoint 5.95: Make OpenRouter response budget configurable
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 loop 15 with 300 steps and 12-hour wall time.
+- Useful behavior observed:
+  - K shared-memory staging compiled, then the pending transform was scored and rejected correctly
+    at 6.9662 geomean TFLOP/s versus 9.5078 best.
+  - Q shared-memory staging compiled, then the pending transform was scored and rejected correctly
+    at 7.6580 geomean TFLOP/s.
+  - PV dual-warp chunk splitting compiled, then the pending transform was scored and rejected
+    correctly at 9.3925 geomean TFLOP/s.
+- The loop later stopped with an OpenRouter HTTP 402 provider error because the account had enough
+  remaining credit for only a smaller completion than the hardcoded 4000-token request.
+
+Change:
+
+- Added `AVO_OPENROUTER_MAX_TOKENS` so the OpenRouter planner response budget can be lowered
+  without changing model or editing code.
+- Kept the default at 4000 tokens.
+
+Why:
+
+- Provider budget limits are operational, not a CUDA-search failure. The loop should be restartable
+  under tighter completion caps when the account has limited remaining credit.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_openrouter_kwargs_use_opus_47_json_schema_defaults tests/test_agent.py::test_openrouter_kwargs_allows_max_tokens_override tests/test_agent.py::test_openrouter_kwargs_ignores_invalid_max_tokens_override -q`:
+    passed, 6 tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Commit and push the max-token knob, then restart the OpenRouter loop with a smaller response
+  budget.
