@@ -15857,3 +15857,51 @@ Verification:
 Decision:
 
 - Restart the requested long loop after this timeout-boundary fix is committed and pushed.
+
+## 2026-05-11 - Checkpoint 5.85: Loosen planner metadata and score-profiler validation
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop with:
+  `--max-steps 160 --max-wall-time-s 28800 --timeout-s 600 --compile-repair-attempts 3`
+- Step 1 produced a real `candidate_transform`: split the MMA PV WMMA loop across two warps.
+  It compiled and passed correctness, but gate rejected it because geomean regressed from
+  9.5078 to 9.4353 TFLOP/s.
+- Subsequent planner attempts repeatedly failed validation instead of producing executable
+  transforms:
+  - repeated an unmodified MMA seed score,
+  - omitted nonsemantic metadata fields (`files_to_inspect`, `expected_effect`, `risk`),
+  - framed an `avo score` command as if it could collect profiler metrics.
+
+Change:
+
+- `VariationDecision.from_mapping()` now fills missing nonsemantic metadata:
+  - `files_to_inspect` is inferred from structured transform paths or raw patch paths,
+  - `expected_effect` and `risk` get conservative validation-oriented defaults.
+- `avo score` still rejects no-edit diagnostics that pretend to collect profiler data, but no longer
+  rejects a real `candidate_transform` score only because the prose mentions profiler-style concepts.
+
+Why:
+
+- The loop should not discard otherwise reviewable transform payloads because OpenRouter omitted
+  bookkeeping fields that can be derived safely.
+- The score/profiler rule was too strict for edited candidates: score is the correct validation path
+  for a transform even if the surrounding hypothesis mentions occupancy, bottlenecks, or similar
+  concepts. The hard restriction should apply to no-edit score diagnostics that claim unavailable
+  profiler evidence.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_defaults_missing_nonsemantic_metadata tests/test_agent.py::test_parse_variation_decision_rejects_score_claiming_profiler_metrics tests/test_agent.py::test_parse_variation_decision_allows_transform_score_with_profiler_wording tests/test_agent.py::test_decision_feedback_explains_missing_required_keys_error tests/test_agent.py::test_decision_feedback_explains_score_profiler_metric_error -q`:
+    passed, 5 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 371
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop after this planner-boundary fix is committed and pushed.
