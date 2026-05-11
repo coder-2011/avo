@@ -16171,3 +16171,36 @@ Verification:
 Decision:
 
 - Restart the OpenRouter long loop after committing and pushing this alias normalizer.
+
+## 2026-05-11 - Checkpoint 5.93: Normalize transform replacement alias
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 long loop after checkpoint 5.92.
+- A planner response failed parser validation because it used `replacement` instead of `replace`
+  inside a candidate transform operation.
+
+Change:
+
+- Normalize `replacement` to `replace` in candidate transforms, including nested batch steps.
+
+Why:
+
+- `replacement` is an obvious spelling variant for the replacement body. Accepting it keeps the
+  transform interface structured while avoiding brittle schema-shape failures.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_normalizes_replacement_alias tests/test_agent.py::test_parse_variation_decision_normalizes_target_path_alias tests/test_agent.py::test_parse_variation_decision_accepts_replace_between_transform -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 381
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Restart the OpenRouter long loop after committing and pushing this alias normalizer.
