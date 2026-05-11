@@ -38,6 +38,22 @@ Recent commits show three distinct threads:
 
 The research direction is active but early. The implementation has reached infrastructure readiness: it can score baseline and candidate backends, isolate failures, gate lineage, and run bounded agent decisions. It has not yet produced a novel accepted attention kernel.
 
+## Current OpenRouter blocker
+
+Current blocker: I do not have enough OpenRouter tokens available to keep running the Opus 4.7 long loop. The CUDA/agent loop was able to compile and score structured transforms, but the provider started returning HTTP 402 budget errors. The downward trajectory below is the provider-reported affordable output-token cap from those errors.
+
+![OpenRouter affordable output token budget decline](figures/openrouter-token-budget.svg)
+
+The chart intentionally plots only output-token limits, because those are comparable across retries. A separate prompt-token rejection also occurred at `2026-05-11T04:08:07+00:00`: the request had `27857` prompt tokens, while the provider reported only `7114` available.
+
+| UTC time | Request | Provider-reported limit |
+|---|---:|---:|
+| 2026-05-11 04:05:13 | `max_tokens=4000` | `1422` affordable output tokens |
+| 2026-05-11 04:08:07 | prompt tokens | `27857 > 7114` prompt-token ceiling |
+| 2026-05-11 04:12:50 | `max_tokens=1200` | `994` affordable output tokens |
+| 2026-05-11 04:13:37 | `max_tokens=800` | `784` affordable output tokens |
+| 2026-05-11 04:15:01 | `max_tokens=700` | `669` affordable output tokens |
+
 ## Reading order
 
 1. `paper.md` for the research proposal.
