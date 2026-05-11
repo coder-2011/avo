@@ -15317,3 +15317,64 @@ Decision:
   hard preflight boundaries.
 - Live autonomous search remains blocked on Anthropic account credits, not on the local
   `candidate_transform`/compile/repair loop.
+
+## 2026-05-11 - Checkpoint 5.75: Expose lineage baseline comparison summary
+
+External sources checked:
+
+- Exa result, NVIDIA NVBench repository,
+  `https://github.com/NVIDIA/nvbench/`
+  - Useful fact: GPU benchmark tooling reports timing samples plus throughput/statistical summaries,
+    not only a single headline time.
+- Exa result, PyTorch distributed benchmark README,
+  `https://github.com/pytorch/pytorch/blob/main/benchmarks/distributed/ddp/README.md`
+  - Useful fact: benchmark workflows commonly emit JSON reports that preserve configuration and
+    environment details so A/B comparisons can be reproduced and diffed.
+
+Change:
+
+- Added `avo lineage-summary PATH`.
+- The command prints the existing `lineage_score_summary()` JSON that the agent already uses
+  internally, including latest score, benchmark lanes, and derived `baseline_comparisons`.
+- Documented the command in the runtime README near the FA2 baseline instructions.
+
+Why:
+
+- The current accepted target-shape candidate is correct but still far below FlashAttention-2.
+  The comparison data existed inside the runtime library but was not exposed as a direct audit
+  command.
+- Exposing the summary keeps the FA2 gap visible without changing the lineage acceptance gate:
+  candidate commits can still improve against prior candidate scores while the baseline lane records
+  how far the run remains from the target.
+
+Measurement:
+
+- `uv run --extra cuda python -m avo score --backend candidate --candidate candidates/cuda_mma_attention_seed.py --seq-lens 4096,8192,16384,32768 --total-tokens 32768 --num-heads 16 --head-dim 128 --dtype bf16 --causal both --repeats 1 --warmup 1 --trials 3 --timeout-s 1800`:
+  passed correctness and reported `geomean_tflops=9.357225004907734`.
+- `uv run python -m avo lineage-summary ./lineage` now reports the committed shared-signature FA2
+  comparison:
+  - best committed candidate geomean: `9.593373728960215` TFLOPS;
+  - FA2 baseline geomean: `109.82622931666803` TFLOPS;
+  - candidate-vs-baseline ratio: `0.08735047892156171`;
+  - gap: `-100.23285558770782` TFLOPS.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_cli.py::test_lineage_summary_command_prints_json tests/test_lineage.py::test_lineage_summary_keeps_baseline_and_candidate_lanes_for_same_signature -q`:
+    passed, 2 tests.
+- Affected:
+  - `uv run pytest tests/test_cli.py tests/test_lineage.py -q`: passed, 69 tests.
+- Command checks:
+  - `uv run python -m avo lineage-summary ./lineage`: passed and printed `baseline_comparisons`.
+  - `uv run python -m avo --help`: includes `lineage-summary`.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 463 tests.
+
+Decision:
+
+- Keep the new command as an audit surface only. It does not alter acceptance, scoring, baseline
+  seeding, or agent planning.
