@@ -15710,3 +15710,67 @@ Decision:
 - Keep FA-compatible TFLOP/s as the primary score metric for baseline comparability, and rely on the
   new metadata to make that choice explicit. If the search loop starts making IO-oriented tradeoffs,
   add separate IO/traffic diagnostics rather than silently changing the headline TFLOP convention.
+
+## 2026-05-11 - Checkpoint 5.82: Add OpenRouter Opus 4.7 planner provider
+
+Sources checked:
+
+- Exa fetch, OpenRouter Claude Opus 4.7 quickstart,
+  `https://openrouter.ai/anthropic/claude-opus-4.7/api`
+  - Useful fact: the concrete OpenRouter model slug is `anthropic/claude-opus-4.7`; OpenRouter
+    presents this model as suited for long-running asynchronous agent workflows.
+- Exa fetch, OpenRouter chat-completions API reference,
+  `https://openrouter.ai/docs/api-reference/chat-completion?explorer=true`
+  - Useful fact: OpenRouter accepts `POST https://openrouter.ai/api/v1/chat/completions` with a
+    bearer `Authorization` header and OpenAI-style `messages`, `model`, and response-format fields.
+- Exa fetch, OpenRouter Claude 4.7 migration guide,
+  `https://openrouter.ai/docs/guides/evaluate-and-optimize/model-migrations/claude-4-7`
+  - Useful fact: Claude 4.7 Opus ignores sampling parameters such as temperature/top_p, supports
+    adaptive reasoning, and uses `verbosity`; `xhigh` is available for this model.
+
+Change:
+
+- Added a selectable planner provider path:
+  - default provider remains `anthropic`
+  - `--provider openrouter` or `AVO_AGENT_PROVIDER=openrouter` uses the OpenRouter chat-completions
+    API
+  - when OpenRouter is selected and the caller has not overridden `--model`, the planner uses
+    `anthropic/claude-opus-4.7`
+  - OpenRouter requests use JSON-schema response format first, then fall back to JSON-object format
+    if the provider rejects the schema wrapper
+  - `AVO_OPENROUTER_VERBOSITY` can override verbosity; Opus 4.7 defaults to `xhigh`
+- Added `OPENROUTER_API_KEY` presence reporting to `agent-status` without printing secret values.
+- Extended planner-provider error classification so OpenRouter payment/credit failures remain
+  provider outages instead of becoming CUDA search failures.
+- Updated README agent workflow docs with OpenRouter commands.
+
+Why:
+
+- Anthropic direct planning was blocked by provider credit errors. The user asked to run the long
+  loop via OpenRouter/Opus 4.7. A provider switch is safer than replacing the Anthropic path because
+  the architecture still says to stay in the Anthropic ecosystem, and OpenRouter is routing the same
+  Anthropic model family while leaving the direct Anthropic implementation available.
+- The existing parser already supports plain JSON text responses, so the minimal port is one
+  provider call boundary rather than a rewrite of decision validation, repair, lineage, or transform
+  materialization.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_openrouter_kwargs_use_opus_47_json_schema_defaults tests/test_agent.py::test_openrouter_response_falls_back_to_json_object_on_schema_rejection tests/test_agent.py::test_request_variation_decision_uses_openrouter_provider tests/test_cli.py::test_agent_status_reports_openrouter_key_without_secret tests/test_evolve.py::test_summarize_attempt_history_classifies_provider_failure_without_supervisor_signal -q`:
+    passed, 5 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 367
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Full runtime suite:
+  - `uv run pytest -q`: passed, 476 tests.
+
+Decision:
+
+- Use OpenRouter only through `OPENROUTER_API_KEY` in the process environment or an untracked env
+  file; do not write user-provided keys into tracked files or logs.
+- Start the requested long loop only after this provider-port checkpoint is committed and pushed, so
+  any candidate accepted by the loop is based on committed orchestrator code.
