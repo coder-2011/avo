@@ -15271,3 +15271,49 @@ Decision:
 
 - Keep `agent-status` as a local setup preflight only. It should not call the provider, validate
   account credits, or replace the score/compile environment checks in `avo env`.
+
+## 2026-05-11 - Checkpoint 5.74: Recheck live loop after async-copy softening
+
+External sources checked:
+
+- Exa result, NVIDIA CUDA Programming Guide asynchronous data copies,
+  `https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/async-copies.html`
+  - Useful fact: Ampere async copies are global-to-shared data movement mechanisms intended to
+    overlap copy with compute; stage lifecycle and completion semantics are the structural issues.
+- Exa result, NVIDIA CCCL/libcu++ `cuda::memcpy_async`,
+  `https://nvidia.github.io/cccl/unstable/libcudacxx/extended_api/asynchronous_operations/memcpy_async.html`
+  - Useful fact: on Ampere+, `cuda::memcpy_async` may lower to `cp.async` for aligned
+    global-to-shared copies with at least 4-byte alignment, while 16-byte aligned groups remain a
+    better throughput-oriented shape.
+- Exa result, NVIDIA Ampere Tuning Guide,
+  `https://docs.nvidia.com/cuda/ampere-tuning-guide/`
+  - Useful fact: Ampere adds hardware acceleration for async global-to-shared copies and retains
+    normal CUDA programming-model guidance; this supports treating copy width as performance
+    guidance unless it violates a concrete dataflow invariant.
+
+State checked:
+
+- Runtime `avo/agent.py` already treats narrow async-copy copy widths as
+  `async_copy_granularity_preference` advisories, not hard structural preflight failures.
+- Existing tests cover that scalar BF16 async-copy patches pass structural preflight and record an
+  advisory.
+- Runtime `README.md` already says async-copy compile failures stay repairable feedback and are not
+  promotable hard preflight solely by recurrence.
+
+Live loop recheck:
+
+- `uv run python -m avo agent-status --env-file /home/ubuntu/avo/.env.local`: passed with
+  `anthropic_api_key_present=true`, `anthropic_installed=true`, and `env_file_loaded=true`, without
+  printing the secret.
+- `timeout 21600 uv run python -m avo evolve-loop --lineage ./lineage --knowledge knowledge/ampere.md --cwd . --env-file ../avo/.env.local --timeout-s 9600 --max-steps 12 --max-wall-time-s 14400 --compile-repair-attempts 4 --attempts-dir ./attempts --attempt-limit 128 --loop-json attempts/loop_provider_recheck_20260511T0000Z.json`:
+  stopped after one planner step with `stopped_reason=planner_provider_error`.
+- Anthropic returned HTTP 400 low-credit provider status before producing any candidate transform.
+
+Decision:
+
+- Do not make a CUDA-side or preflight-side code change from this run. The async-copy granularity
+  rule is already soft; only concrete structural errors such as invalid pipeline stage lifecycle,
+  disconnected helper code, malformed transform materialization, or invalid WMMA contracts remain
+  hard preflight boundaries.
+- Live autonomous search remains blocked on Anthropic account credits, not on the local
+  `candidate_transform`/compile/repair loop.
