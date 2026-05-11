@@ -16282,3 +16282,44 @@ Decision:
 
 - Commit and push the max-token knob, then restart the OpenRouter loop with a smaller response
   budget.
+
+## 2026-05-11 - Checkpoint 5.96: Make variation prompt budget configurable
+
+Attempted live loop:
+
+- Restarted OpenRouter/Opus 4.7 with `AVO_OPENROUTER_MAX_TOKENS=1200`.
+- OpenRouter then rejected the request because the planner prompt exceeded the account's remaining
+  prompt-token ceiling: 27857 prompt tokens versus 7114 allowed.
+
+Change:
+
+- Added `AVO_VARIATION_PROMPT_MAX_CHARS` and wired it through initial variation-prompt rendering
+  and validation-feedback retry prompts.
+- The default remains `MAX_VARIATION_PROMPT_CHARS=120000`; the new knob only narrows the prompt
+  when the runtime environment asks for it.
+
+Why:
+
+- The provider failure was caused by an operational account limit, not by a CUDA candidate. The loop
+  needs a way to continue with a compact prompt when the selected provider/key has a smaller context
+  budget.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_request_variation_decision_uses_openrouter_provider tests/test_agent.py::test_decision_feedback_retry_uses_prompt_budget_override tests/test_agent.py::test_decision_feedback_retry_preserves_budget_and_latest_context -q`:
+    passed, 3 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 388
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+- Dry sizing:
+  - `AVO_VARIATION_PROMPT_MAX_CHARS=10000` produced a 9488-character variation prompt from current
+    knowledge/lineage inputs.
+
+Decision:
+
+- Commit and push the prompt-budget knob, then retry the OpenRouter loop with compact prompt and
+  smaller completion budget.
