@@ -16323,3 +16323,43 @@ Decision:
 
 - Commit and push the prompt-budget knob, then retry the OpenRouter loop with compact prompt and
   smaller completion budget.
+
+## 2026-05-11 - Checkpoint 5.97: Reject missing candidate score paths
+
+Attempted live loop:
+
+- After compacting the OpenRouter prompt and response budgets, the provider still had very little
+  remaining credit.
+- One ultra-compact planner response chose a no-edit score diagnostic for
+  `candidates/baseline.py`, which does not exist. The benchmark step ran and failed with
+  `FileNotFoundError`, wasting a loop step.
+
+Change:
+
+- Added next-command preflight for `avo score --backend candidate --candidate ...` and
+  `avo profile --backend candidate --candidate ...`.
+- The preflight now requires `--candidate` to reference an existing repo-relative candidate wrapper,
+  or a candidate path added by the same raw non-CUDA `candidate_patch`.
+- Added retry feedback that tells the planner to use an existing wrapper such as
+  `candidates/cuda_mma_attention_seed.py` and not invent placeholder paths.
+
+Why:
+
+- Missing candidate wrappers are deterministic planner-interface failures, not useful CUDA search
+  evidence. Rejecting them before execution protects benchmark time and API budget.
+
+Verification:
+
+- Focused:
+  - `uv run pytest tests/test_agent.py::test_parse_variation_decision_rejects_missing_candidate_score_path tests/test_agent.py::test_parse_variation_decision_rejects_missing_candidate_profile_path tests/test_agent.py::test_parse_variation_decision_allows_candidate_path_added_by_patch tests/test_agent.py::test_decision_feedback_explains_missing_candidate_path_error -q`:
+    passed, 4 tests.
+- Affected:
+  - `uv run pytest tests/test_agent.py tests/test_cli.py tests/test_evolve.py -q`: passed, 392
+    tests.
+- Hygiene:
+  - `uv run ruff check`: passed in the runtime repo.
+  - `git diff --check`: passed in the runtime repo.
+
+Decision:
+
+- Commit and push the missing-candidate preflight before the next OpenRouter run.
